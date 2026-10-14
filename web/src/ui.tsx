@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { preview } from './api';
+import { apiURL, preview } from './api';
 import type { Entry } from './api';
+import { Markdown, isMarkdown } from './Markdown';
 
 export type IconName = 'folder' | 'file' | 'image' | 'trash' | 'upload' | 'download' | 'plus' | 'search' | 'chevron' | 'refresh' | 'copy' | 'move' | 'edit' | 'close' | 'tasks' | 'check' | 'logout' | 'menu' | 'grid' | 'list' | 'restore' | 'eye' | 'lock' | 'help' | 'server' | 'arrow' | 'warning';
 const shapes: Record<IconName, ReactNode> = {
@@ -36,20 +37,21 @@ const shapes: Record<IconName, ReactNode> = {
 export function Icon({ name, size = 20, className = '' }: { name: IconName; size?: number; className?: string }) {
   return <svg aria-hidden="true" width={size} height={size} className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">{shapes[name]}</svg>;
 }
-export function Modal({ title, children, onClose, wide = false }: { title: string; children: ReactNode; onClose: () => void; wide?: boolean }) {
+export function Modal({ title, children, onClose, wide = false, headerContent }: { title: string; children: ReactNode; onClose: () => void; wide?: boolean; headerContent?: ReactNode }) {
   const ref = useRef<HTMLDialogElement>(null);
+  const backdropPress = useRef(false);
   useEffect(() => {
     const dialog = ref.current!;
     const focused = document.activeElement as HTMLElement | null;
     dialog.showModal();
     return () => { dialog.close(); focused?.focus(); };
   }, []);
-  return <dialog ref={ref} className={`modal ${wide ? 'modal-wide' : ''}`} aria-label={title} onCancel={event => { event.preventDefault(); onClose(); }} onClick={event => { if (event.target === ref.current) { const bounds = ref.current!.getBoundingClientRect(); if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) onClose(); } }}>
-    <header className="modal-heading"><h2>{title}</h2><button className="icon-button" aria-label={`关闭${title}`} onClick={onClose}><Icon name="close" /></button></header>
+  return <dialog ref={ref} className={`modal ${wide ? 'modal-wide' : ''}`} aria-label={title} onCancel={event => { event.preventDefault(); onClose(); }} onPointerDown={event => { const bounds = event.currentTarget.getBoundingClientRect(); backdropPress.current = event.target === event.currentTarget && (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom); }} onClick={event => { const startedOutside = backdropPress.current; backdropPress.current = false; if (startedOutside && event.target === ref.current) { const bounds = ref.current!.getBoundingClientRect(); if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) onClose(); } }}>
+    <header className="modal-heading"><h2>{title}</h2>{headerContent}<button className="icon-button" aria-label={`关闭${title}`} onClick={onClose}><Icon name="close" /></button></header>
     {children}
   </dialog>;
 }
-export function Preview({ share, entry }: { share: string; entry: Entry }) {
+export function Preview({ share, entry, onEdit }: { share: string; entry: Entry; onEdit?: () => void }) {
   const [content, setContent] = useState<{ url?: string; text?: string; error?: string }>({});
   useEffect(() => {
     const controller = new AbortController();
@@ -66,7 +68,8 @@ export function Preview({ share, entry }: { share: string; entry: Entry }) {
     }).catch(error => { if (!controller.signal.aborted) setContent({ error: error instanceof Error ? error.message : '预览失败' }); });
     return () => { controller.abort(); if (url) URL.revokeObjectURL(url); };
   }, [share, entry.path]);
-  return <div className="preview-body">{content.error ? <div className="empty-state"><Icon name="file" size={48} /><h3>无法预览此文件</h3><p>{content.error}</p><p>支持常见图片以及不超过 1 MiB 的 UTF-8 文本；其他文件请下载查看。</p></div> : content.url ? <img className="preview-image" src={content.url} alt={entry.name} /> : content.text !== undefined ? <pre className="preview-text">{content.text}</pre> : <div className="loading-state" role="status"><span className="spinner" />正在加载预览…</div>}</div>;
+  return <><div className="preview-body">{content.error ? <div className="empty-state"><Icon name="file" size={48} /><h3>无法预览此文件</h3><p>{content.error}</p><p>支持常见图片以及不超过 1 MiB 的 UTF-8 文本；其他文件请下载查看。</p></div> : content.url ? <img className="preview-image" src={content.url} alt={entry.name} /> : content.text !== undefined ? isMarkdown(entry.name) ? <Markdown text={content.text} share={share} path={entry.path} /> : <pre className="preview-text">{content.text}</pre> : <div className="loading-state" role="status"><span className="spinner" />正在加载预览…</div>}</div>
+    <footer className="modal-actions preview-footer"><span>{formatBytes(entry.size)} · {formatDate(entry.modified)}</span><div className="preview-actions">{content.text !== undefined && onEdit && <button className="button" onClick={onEdit}><Icon name="edit" size={17} />编辑文件</button>}<a className="button primary" href={apiURL('download', { share, path: entry.path })} download={entry.name}><Icon name="download" size={17} />下载文件</a></div></footer></>;
 }
 export function formatBytes(value: number) {
   if (value < 1024) return `${value} B`;

@@ -263,6 +263,8 @@ func (s *Server) routes(static string) {
 	})
 	s.shareAPI("GET /api/files", s.list)
 	s.shareAPI("POST /api/files/size", s.calculateSize)
+	s.shareAPI("GET /api/files/text", s.fileText)
+	s.shareAPI("POST /api/files/text/save", s.saveFileText)
 	s.shareAPI("POST /api/mkdir", s.mkdir)
 	s.shareAPI("POST /api/rename", s.rename)
 	s.shareAPI("POST /api/upload", s.upload)

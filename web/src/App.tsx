@@ -11,10 +11,11 @@ import { AdvancedSettings, defaultFileSettings } from './FileSettings';
 import { FileTableHeader } from './FileTableHeader';
 import { FileSizeDialog } from './FileSizeDialog';
 import type { SizeSelection } from './FileSizeDialog';
+import { TextEditor } from './TextEditor';
 
 type Item = Entry & { trashId?: string; deletedAt?: string };
 type View = { share: string; path: string; trash: boolean };
-type ModalState = { kind: 'mkdir' } | { kind: 'rename'; entry: Item } | { kind: 'destination'; operation: Operation } | { kind: 'delete'; items: Item[]; permanent: boolean } | { kind: 'preview'; entry: Item } | { kind: 'help' } | { kind: 'shares' } | { kind: 'advanced' };
+type ModalState = { kind: 'mkdir' } | { kind: 'rename'; entry: Item } | { kind: 'destination'; operation: Operation } | { kind: 'delete'; items: Item[]; permanent: boolean } | { kind: 'preview'; entry: Item } | { kind: 'edit'; share: string; entry: Item } | { kind: 'help' } | { kind: 'shares' } | { kind: 'advanced' };
 type UploadTask = { id: string; name: string; size: number; loaded: number; status: 'queued' | 'running' | 'done' | 'error' | 'cancelled' | 'skipped'; error?: string; controller: AbortController };
 type ConflictPrompt = { title: string; description: string; resolve: (policy: Conflict | null) => void };
 const taskLabels: Record<string, string> = { copy: '复制', move: '移动', trash: '移至回收站' };
@@ -66,10 +67,20 @@ export default function App() {
   const conflictRef = useRef<ConflictPrompt | null>(null);
   const authEpoch = useRef(0);
   const viewRef = useRef(view);
-  viewRef.current = view;
+  const backHistory = useRef<View[]>([]);
+  const forwardHistory = useRef<View[]>([]);
+
+  function setCurrentView(next: View) {
+    viewRef.current = next;
+    setView(next);
+  }
+  function clearHistory() {
+    backHistory.current = []; forwardHistory.current = [];
+  }
 
   function clearAuth() {
     authEpoch.current++;
+    clearHistory();
     configureSession(null, clearAuth);
     setSession(null); setShares([]); setEntries([]); setTasks([]); setUploads([]); setModal(null); setDrawer(false); setSelected(new Set()); setClipboard(null); setContextMenu(null);
     setFileSettings(defaultFileSettings); setSort(defaultFileSettings.sort);
@@ -79,6 +90,7 @@ export default function App() {
     uploadControllers.current.clear(); operations.current.clear(); previousTasks.current.clear();
   }
   function acceptSession(value: Session) {
+    clearHistory();
     configureSession(value, clearAuth); setSession(value); setLoginError(''); setNotice(null);
   }
   function notify(text: string, error = false) {
@@ -115,7 +127,9 @@ export default function App() {
     if (!session) return;
     const controller = new AbortController();
     request<Share[]>('shares', undefined, undefined, controller.signal).then(data => {
-      setShares(data); setView({ share: data[0]?.id ?? '', path: '', trash: false });
+      if (controller.signal.aborted) return;
+      clearHistory();
+      setShares(data); setCurrentView({ share: data[0]?.id ?? '', path: '', trash: false });
     }).catch(error => { if (!controller.signal.aborted) setListError(error instanceof Error ? error.message : '读取共享目录失败'); });
     return () => controller.abort();
   }, [session]);
@@ -218,23 +232,51 @@ export default function App() {
   const running = tasks.filter(task => task.status === 'running').length + uploads.filter(task => task.status === 'running' || task.status === 'queued').length;
   const pathParts = view.path.split('/').filter(Boolean);
 
+  function applyNavigation(next: View) {
+    setCurrentView(next); setSelected(new Set()); setFilter(''); setSidebar(false); setContextMenu(null);
+  }
   function navigate(shareId: string, path = '', trash = false) {
-    setView({ share: shareId, path, trash }); setSelected(new Set()); setFilter(''); setSidebar(false); setContextMenu(null);
+    const next = { share: shareId, path, trash };
+    const current = viewRef.current;
+    if (current.share !== next.share || current.path !== next.path || current.trash !== next.trash) {
+      if (current.share && shares.some(item => item.id === current.share)) backHistory.current.push(current);
+      forwardHistory.current = [];
+    }
+    applyNavigation(next);
+  }
+  function travelHistory(direction: 'back' | 'forward') {
+    const source = direction === 'back' ? backHistory.current : forwardHistory.current;
+    const destination = direction === 'back' ? forwardHistory.current : backHistory.current;
+    const current = viewRef.current;
+    while (source.length) {
+      const next = source.pop()!;
+      if (!shares.some(item => item.id === next.share) || (current.share === next.share && current.path === next.path && current.trash === next.trash)) continue;
+      if (shares.some(item => item.id === current.share)) destination.push(current);
+      applyNavigation(next);
+      return;
+    }
   }
   async function refreshShares(change: ShareSettingsChange) {
     const epoch = authEpoch.current;
     setClipboard(null); setSelected(new Set()); setEntries([]); setContextMenu(null); setListError(''); anchor.current = null;
-    setView(current => {
-      if (current.share !== change.id) return current;
-      if (change.removed) return { share: shares.find(item => item.id !== change.id)?.id ?? '', path: '', trash: false };
-      return change.pathChanged ? { ...current, path: '', trash: false } : current;
-    });
+    if (change.removed || change.pathChanged) {
+      backHistory.current = backHistory.current.filter(item => item.share !== change.id);
+      forwardHistory.current = [];
+    }
+    const current = viewRef.current;
+    if (current.share === change.id) {
+      if (change.removed) setCurrentView({ share: shares.find(item => item.id !== change.id)?.id ?? '', path: '', trash: false });
+      else if (change.pathChanged) setCurrentView({ ...current, path: '', trash: false });
+    }
     setShareRevision(value => value + 1); setRefresh(value => value + 1);
     try {
       const data = await request<Share[]>('shares');
       if (epoch !== authEpoch.current) return;
       setShares(data);
-      setView(current => data.some(item => item.id === current.share) ? current : { share: data[0]?.id ?? '', path: '', trash: false });
+      backHistory.current = backHistory.current.filter(item => data.some(share => share.id === item.share));
+      if (shares.some(item => !data.some(share => share.id === item.id))) forwardHistory.current = [];
+      else forwardHistory.current = forwardHistory.current.filter(item => data.some(share => share.id === item.share));
+      if (!data.some(item => item.id === viewRef.current.share)) setCurrentView({ share: data[0]?.id ?? '', path: '', trash: false });
     } catch (error) {
       if (epoch === authEpoch.current) setListError(error instanceof Error ? error.message : '读取共享目录失败');
       throw error;
@@ -384,11 +426,14 @@ export default function App() {
   }
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (!session) return;
+      if (!session || event.defaultPrevented) return;
       const target = event.target as HTMLElement;
-      if (target.closest('input, textarea, select, [contenteditable="true"]') || modal || conflict) return;
+      if (target.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="dialog"], dialog') || modal || conflict || sizeSelection || document.querySelector('dialog[open]')) return;
       const command = event.ctrlKey || event.metaKey;
-      if (event.key === 'Escape') { setContextMenu(null); setDrawer(false); setSelected(new Set()); }
+      if (event.altKey && !command && !event.shiftKey && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
+        event.preventDefault();
+        if (!target.closest('[role="columnheader"]')) travelHistory(event.key === 'ArrowLeft' ? 'back' : 'forward');
+      } else if (event.key === 'Escape') { setContextMenu(null); setDrawer(false); setSelected(new Set()); }
       else if (command && event.key.toLowerCase() === 'a') { event.preventDefault(); setSelected(new Set(visible.map(entry => entry.trashId ?? entry.path))); }
       else if (command && event.key.toLowerCase() === 'f') { event.preventDefault(); filterInput.current?.focus(); }
       else if (command && (event.key.toLowerCase() === 'c' || event.key.toLowerCase() === 'x') && picked.length && !view.trash) {
@@ -411,6 +456,7 @@ export default function App() {
     { label: '永久删除', icon: 'trash', disabled: !picked.length || readOnly || actionBusy, run: () => deleteSelection(), danger: true },
   ] : [
     { label: '预览', icon: 'eye', disabled: !single || !!single.isDir || !!single.isSymlink, run: () => { if (single) openEntry(single); } },
+    { label: '编辑文件', icon: 'edit', disabled: !single || !!single.isDir || !!single.isSymlink || readOnly, run: () => { if (single) setModal({ kind: 'edit', share: view.share, entry: single }); } },
     { label: '下载', icon: 'download', disabled: !picked.some(entry => !entry.isDir && !entry.isSymlink), run: downloadSelected },
     { label: '复制到', icon: 'copy', disabled: !picked.length || !shares.some(item => !item.readOnly), run: () => destination('copy') },
     { label: '移动到', icon: 'move', disabled: !picked.length || readOnly, run: () => destination('move') },
@@ -442,12 +488,13 @@ export default function App() {
     {drawer && <><button className="drawer-backdrop" aria-label="关闭任务中心" onClick={() => setDrawer(false)} /><aside className="task-drawer" aria-label="任务中心"><header className="drawer-header"><div><span className="eyebrow">ACTIVITY</span><h2>任务中心{running > 0 && <span className="running-count">{running} 进行中</span>}</h2></div><button className="icon-button" aria-label="关闭任务中心" onClick={() => setDrawer(false)}><Icon name="close" /></button></header><p className="drawer-description">文件传输与后台操作，在这里一目了然。</p><div className={`connection-status ${streamConnected ? '' : 'disconnected'}`}><span />{streamConnected ? '实时同步 · 切换目录不影响任务' : '实时连接恢复中 · 自动轮询任务状态'}</div><div className="task-list">{uploads.length === 0 && tasks.length === 0 && <div className="empty-state"><Icon name="tasks" size={42} /><h3>还没有任务</h3><p>上传、复制、移动和删除任务会显示在这里。</p></div>}{uploads.map(task => <article key={task.id} className="task-card"><div className="task-card-heading"><span className="task-icon"><Icon name="upload" size={19} /></span><div><h3 title={task.name}>{task.name}</h3><p>上传 · {formatBytes(task.size)}</p></div><span className={`task-state state-${task.status}`}>{statuses[task.status]}</span></div><progress aria-label={`${task.name} 上传进度`} max={Math.max(task.size, 1)} value={task.status === 'done' ? Math.max(task.size, 1) : task.loaded} /><div className="task-card-footer"><span>{task.status === 'running' && task.loaded >= task.size ? '服务器正在保存…' : `${formatBytes(task.loaded)} / ${formatBytes(task.size)}`}</span>{(task.status === 'running' || task.status === 'queued') && <button onClick={() => { task.controller.abort(); setUploads(current => current.map(item => item.id === task.id ? { ...item, status: 'cancelled' } : item)); }} aria-label={`取消上传 ${task.name}`}>取消</button>}</div>{task.error && task.status === 'error' && <p className="task-error">{task.error}</p>}</article>)}{tasks.map(task => <article key={task.id} className="task-card"><div className="task-card-heading"><span className="task-icon"><Icon name={task.kind === 'copy' ? 'copy' : task.kind === 'move' ? 'move' : 'trash'} size={19} /></span><div><h3>{taskLabels[task.kind] ?? task.kind}</h3><p className="task-id">任务 {task.id.slice(0, 8)}</p></div><span className={`task-state state-${task.status}`}>{statuses[task.status]}</span></div><progress aria-label={`${taskLabels[task.kind] ?? task.kind}任务进度`} max={Math.max(task.total, task.completed, 1)} value={task.status === 'done' ? Math.max(task.total, task.completed, 1) : task.completed} /><div className="task-card-footer"><span>{task.completed} / {task.total} 个项目</span>{task.status === 'running' && <button aria-label={`取消任务 ${task.id}`} onClick={async () => { try { await request('tasks/cancel', { id: task.id }); notify('已发送任务取消请求'); } catch (error) { notify(error instanceof Error ? error.message : '取消失败', true); } }}>取消任务</button>}{task.status === 'error' && operations.current.has(task.id) && <button onClick={() => { void retryTask(task); }}>重新处理</button>}</div>{task.error && <p className="task-error">{task.error}</p>}</article>)}</div><footer className="drawer-foot">上传取消会中止传输；后台任务取消不撤销已完成的项目。</footer></aside></>}
     {modal?.kind === 'shares' && <ShareSettings onClose={() => setModal(null)} onChanged={refreshShares} />}
     {modal?.kind === 'advanced' && <AdvancedSettings value={fileSettings} onClose={() => setModal(null)} onSaved={data => { setFileSettings(data); setSelected(new Set()); anchor.current = null; setContextMenu(null); setModal(null); notify('高级设置已保存'); }} />}
+    {modal?.kind === 'edit' && <TextEditor share={modal.share} path={modal.entry.path} name={modal.entry.name} onClose={() => setModal(null)} onSaved={() => setRefresh(value => value + 1)} />}
     {modal?.kind === 'mkdir' && !conflict && <NameDialog title="新建文件夹" label="文件夹名称" initialName="" onClose={() => setModal(null)} onSubmit={async name => { await request('mkdir', { share: view.share, path: view.path, name }); setModal(null); setRefresh(value => value + 1); notify('文件夹已创建'); }} />}
     {modal?.kind === 'rename' && !conflict && <NameDialog title="重命名" label="新名称" initialName={modal.entry.name} onClose={() => setModal(null)} onSubmit={async name => { const entry = modal.entry; setModal(null); try { if (await withConflict(policy => request('rename', { share: view.share, path: entry.path, name, conflict: policy }), `重命名为「${name}」时发生冲突`)) { setRefresh(value => value + 1); notify('重命名已处理'); } } catch (error) { notify(error instanceof Error ? error.message : '重命名失败', true); } }} />}
     {modal?.kind === 'destination' && !conflict && <DestinationDialog shares={shares} initialShare={view.share} initialPath={view.path} count={modal.operation.paths.length} kind={modal.operation.kind as 'copy' | 'move'} onClose={() => setModal(null)} onConfirm={async (destinationShare, destinationPath) => { const operation = modal.operation; setModal(null); try { await startOperation({ ...operation, destinationShare, destination: destinationPath }); } catch (error) { notify(error instanceof Error ? error.message : '操作失败', true); } }} />}
     {modal?.kind === 'delete' && !conflict && <Modal title={modal.permanent ? '永久删除文件' : '移至回收站'} onClose={() => { if (!actionBusy) setModal(null); }}><div className="modal-body"><div className={`delete-illustration ${modal.permanent ? 'permanent' : ''}`}><Icon name="trash" size={30} /></div><h3 className="confirm-title">{modal.permanent ? `永久删除 ${modal.items.length} 个项目？` : `将 ${modal.items.length} 个项目移至回收站？`}</h3><p className="confirm-description">{modal.permanent ? '此操作不可撤销，文件与文件夹中的所有内容将永久删除。' : '文件将从当前位置移除，您可以稍后在回收站恢复。'}</p><ul className="delete-items">{modal.items.slice(0, 5).map(item => <li key={item.trashId ?? item.path}><Icon name={fileIcon(item)} size={16} /><span>{item.name}</span></li>)}{modal.items.length > 5 && <li>以及其他 {modal.items.length - 5} 个项目</li>}</ul></div><footer className="modal-actions"><button className="button" disabled={actionBusy} onClick={() => setModal(null)}>取消</button><button className={`button ${modal.permanent ? 'danger' : 'primary'}`} disabled={actionBusy} onClick={async () => { setActionBusy(true); try { if (modal.permanent) { for (const item of modal.items) await request('trash/delete', { share: view.share, id: item.trashId }); setRefresh(value => value + 1); notify('所选项目已永久删除'); } else await runOperation({ kind: 'trash', share: view.share, paths: modal.items.map(item => item.path), conflict: 'error' }); setModal(null); } catch (error) { notify(error instanceof Error ? error.message : '删除失败', true); setRefresh(value => value + 1); setModal(null); } finally { setActionBusy(false); } }}>{actionBusy ? '处理中…' : modal.permanent ? '永久删除' : '移至回收站'}</button></footer></Modal>}
-    {modal?.kind === 'preview' && !conflict && <Modal title={modal.entry.name} wide onClose={() => setModal(null)}><Preview share={view.share} entry={modal.entry} /><footer className="modal-actions preview-footer"><span>{formatBytes(modal.entry.size)} · {formatDate(modal.entry.modified)}</span><a className="button primary" href={apiURL('download', { share: view.share, path: modal.entry.path })} download={modal.entry.name}><Icon name="download" size={17} />下载文件</a></footer></Modal>}
-    {modal?.kind === 'help' && !conflict && <Modal title="键盘快捷键" onClose={() => setModal(null)}><div className="modal-body"><p className="muted">在文件区域中使用。输入文字或打开对话框时不会触发。</p><dl className="shortcuts">{[['选择全部', 'Ctrl / ⌘ + A'], ['筛选当前目录', 'Ctrl / ⌘ + F'], ['复制 / 剪切', 'Ctrl / ⌘ + C / X'], ['粘贴到当前目录', 'Ctrl / ⌘ + V'], ['重命名', 'F2'], ['移至回收站 / 永久删除', 'Delete'], ['打开所选项目', 'Enter'], ['上一级目录', 'Alt + ↑'], ['清除选择 / 关闭任务中心', 'Esc'], ['连续选择', 'Shift + 点击'], ['多选', 'Ctrl / ⌘ + 点击']].map(([label, key]) => <div key={label}><dt>{label}</dt><dd><kbd>{key}</kbd></dd></div>)}</dl></div><footer className="modal-actions"><button className="button primary" onClick={() => setModal(null)}>知道了</button></footer></Modal>}
+    {modal?.kind === 'preview' && !conflict && <Modal title={modal.entry.name} wide onClose={() => setModal(null)}><Preview share={view.share} entry={modal.entry} onEdit={!readOnly && !view.trash && !modal.entry.isDir && !modal.entry.isSymlink ? () => setModal({ kind: 'edit', share: view.share, entry: modal.entry }) : undefined} /></Modal>}
+    {modal?.kind === 'help' && !conflict && <Modal title="键盘快捷键" onClose={() => setModal(null)}><div className="modal-body"><p className="muted">在文件区域中使用。输入文字或打开对话框时不会触发。列标题获得焦点时，Alt + 左右键用于调整列顺序，不会后退或前进。</p><dl className="shortcuts">{[['选择全部', 'Ctrl / ⌘ + A'], ['筛选当前目录', 'Ctrl / ⌘ + F'], ['复制 / 剪切', 'Ctrl / ⌘ + C / X'], ['粘贴到当前目录', 'Ctrl / ⌘ + V'], ['重命名', 'F2'], ['移至回收站 / 永久删除', 'Delete'], ['打开所选项目', 'Enter'], ['后退', 'Alt + ←'], ['前进', 'Alt + →'], ['上一级目录', 'Alt + ↑'], ['清除选择 / 关闭任务中心', 'Esc'], ['连续选择', 'Shift + 点击'], ['多选', 'Ctrl / ⌘ + 点击']].map(([label, key]) => <div key={label}><dt>{label}</dt><dd><kbd>{key}</kbd></dd></div>)}</dl></div><footer className="modal-actions"><button className="button primary" onClick={() => setModal(null)}>知道了</button></footer></Modal>}
     {conflict && <Modal title={conflict.title} onClose={() => conflict.resolve(null)}><div className="modal-body"><div className="conflict-heading"><Icon name="warning" size={25} /><p>{conflict.description}</p></div><p className="muted">文件不会自动覆盖，请选择处理方式：</p><div className="conflict-options"><button onClick={() => conflict.resolve('skip')}><Icon name="chevron" /><span><strong>跳过同名项目</strong><small>保留目标中的文件，继续处理其他项目</small></span></button><button onClick={() => conflict.resolve('keep')}><Icon name="copy" /><span><strong>保留两者</strong><small>为新文件自动添加序号，保留原有文件</small></span></button><button className="replace-option" onClick={() => conflict.resolve('replace')}><Icon name="warning" /><span><strong>替换目标项目</strong><small>覆盖目标中的同名内容，此操作不可撤销</small></span></button></div></div><footer className="modal-actions"><button className="button" onClick={() => conflict.resolve(null)}>取消此次操作</button></footer></Modal>}
   </div>;
 }
