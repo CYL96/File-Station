@@ -47,11 +47,11 @@ export function Modal({ title, children, onClose, wide = false, headerContent }:
     return () => { dialog.close(); focused?.focus(); };
   }, []);
   return <dialog ref={ref} className={`modal ${wide ? 'modal-wide' : ''}`} aria-label={title} onCancel={event => { event.preventDefault(); onClose(); }} onPointerDown={event => { const bounds = event.currentTarget.getBoundingClientRect(); backdropPress.current = event.target === event.currentTarget && (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom); }} onClick={event => { const startedOutside = backdropPress.current; backdropPress.current = false; if (startedOutside && event.target === ref.current) { const bounds = ref.current!.getBoundingClientRect(); if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) onClose(); } }}>
-    <header className="modal-heading"><h2>{title}</h2>{headerContent}<button className="icon-button" aria-label={`关闭${title}`} onClick={onClose}><Icon name="close" /></button></header>
+    <header className="modal-heading"><h2>{title}</h2>{headerContent}<button className="button icon-button modal-close" aria-label={`关闭${title}`} onClick={onClose}><Icon name="close" size={17} />关闭</button></header>
     {children}
   </dialog>;
 }
-export function Preview({ share, entry, onEdit }: { share: string; entry: Entry; onEdit?: () => void }) {
+export function Preview({ share, entry, onClose, onEdit }: { share: string; entry: Entry; onClose: () => void; onEdit?: () => void }) {
   const [content, setContent] = useState<{ url?: string; text?: string; error?: string }>({});
   useEffect(() => {
     const controller = new AbortController();
@@ -68,8 +68,10 @@ export function Preview({ share, entry, onEdit }: { share: string; entry: Entry;
     }).catch(error => { if (!controller.signal.aborted) setContent({ error: error instanceof Error ? error.message : '预览失败' }); });
     return () => { controller.abort(); if (url) URL.revokeObjectURL(url); };
   }, [share, entry.path]);
-  return <><div className="preview-body">{content.error ? <div className="empty-state"><Icon name="file" size={48} /><h3>无法预览此文件</h3><p>{content.error}</p><p>支持常见图片以及不超过 1 MiB 的 UTF-8 文本；其他文件请下载查看。</p></div> : content.url ? <img className="preview-image" src={content.url} alt={entry.name} /> : content.text !== undefined ? isMarkdown(entry.name) ? <Markdown text={content.text} share={share} path={entry.path} /> : <pre className="preview-text">{content.text}</pre> : <div className="loading-state" role="status"><span className="spinner" />正在加载预览…</div>}</div>
-    <footer className="modal-actions preview-footer"><span>{formatBytes(entry.size)} · {formatDate(entry.modified)}</span><div className="preview-actions">{content.text !== undefined && onEdit && <button className="button" onClick={onEdit}><Icon name="edit" size={17} />编辑文件</button>}<a className="button primary" href={apiURL('download', { share, path: entry.path })} download={entry.name}><Icon name="download" size={17} />下载文件</a></div></footer></>;
+  return <Modal title={entry.name} wide onClose={onClose} headerContent={<div className="preview-actions">{content.text !== undefined && onEdit && <button className="button" onClick={onEdit}><Icon name="edit" size={17} />编辑文件</button>}<a className="button primary" href={apiURL('download', { share, path: entry.path })} download={entry.name}><Icon name="download" size={17} />下载文件</a></div>}>
+    <div className="preview-body">{content.error ? <div className="empty-state"><Icon name="file" size={48} /><h3>无法预览此文件</h3><p>{content.error}</p><p>支持常见图片以及不超过 1 MiB 的 UTF-8 文本；其他文件请下载查看。</p></div> : content.url ? <img className="preview-image" src={content.url} alt={entry.name} /> : content.text !== undefined ? isMarkdown(entry.name) ? <Markdown text={content.text} share={share} path={entry.path} /> : <pre className="preview-text">{content.text}</pre> : <div className="loading-state" role="status"><span className="spinner" />正在加载预览…</div>}</div>
+    <footer className="modal-actions preview-footer"><span>{formatBytes(entry.size)} · {formatDate(entry.modified)}</span><span className="preview-resize-help">拖动右下角可调整宽度</span></footer>
+  </Modal>;
 }
 export function formatBytes(value: number) {
   if (value < 1024) return `${value} B`;
