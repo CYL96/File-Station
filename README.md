@@ -1,0 +1,192 @@
+# NixOS File Station
+
+NixOS 上的单管理员 Web 文件管理器。React + TypeScript 前端、Go HTTP 服务、SQLite 应用状态；文件内容直接保留在共享目录，不导入数据库。界面借鉴 DSM 的目录树、面包屑、工具栏和任务中心，不复刻多窗口桌面。
+
+## 功能
+
+- 管理员登录、12 小时会话、退出与 CSRF 校验；登录页仅保留图标、File Station 标题及密码表单，不显示宣传副标题和页脚文案。
+- 多共享目录浏览、当前目录名称过滤、排序、多选、右键菜单；当前目录仅由路径栏展示，不另设重复标题，手机导航、只读标识与回收站共享切换也位于路径栏。文件面板四周外间距统一为桌面 12px、手机 8px，保留原有列表行高和按钮尺寸。
+- 「共享设置」中新增、编辑与移除共享；只能在部署允许的目录范围内选择路径，保存后立即生效并持久化。
+- 文件工具栏「高级设置」只提供列显示选项：名称列始终可见，其他列可独立隐藏。列顺序像 Windows 文件管理器一样在列表表头左右拖动调整：被拖动表头浮起并跟随指针，列表表头与整列内容实时平滑让位，插入标记显示落点，松开后表头落入新位置并自动保存。拖到表头之外取消，保存失败回到原顺序并提示错误；系统减少动态效果时不播放过渡动画。网格视图只预览表头移动，不平移文件卡片。也可聚焦表头后用 Alt + 左右键移动列。隐藏列设置不丢失，点击表头仍调整文件升降序，拖动不会触发排序；显示隐藏项目移至工具栏，勾选后自动保存。设置适用于全部共享、回收站和网格视图，保存到服务端私有数据库，刷新、重新登录和重启后保留；保存高级设置不会重置当前文件排序，取消弹框不保存。窄屏可在文件区域内横向滚动查看各列。
+- 列显示提供名称、大小、修改时间、类型、扩展名、权限、所有者、所属组、创建时间。新增五列默认不勾选，以保留已有布局；文件排序通过列表表头调整。权限为包含特殊权限位的八进制值，所有者/组优先显示名称，无法解析时显示 UID/GID。创建时间为文件系统真实 birth time，不支持时显示「—」，不使用修改或状态变更时间代替；缺失创建时间的条目在同类条目中始终排最后。
+- 勾选文件或文件夹后，工具栏和右键菜单出现「计算大小」：弹框显示每项大小、总字节数和文件/文件夹数量；支持只读共享与回收站。递归统计普通文件的逻辑大小（不是磁盘占用），包含隐藏文件，不跟随符号链接，不计特殊文件和 `.webui-` 内部数据；硬链接按每个文件路径计数。读取失败不显示部分总计，关闭弹框会取消请求和遍历。统计不是文件系统快照，期间外部文件变动可能影响结果。
+- 新建文件夹、重命名、递归复制、移动、上传、下载和 Range 请求；新建与上传按钮位于文件面板路径栏右侧，手机窄屏时在路径下方同栏换行。
+- 同名冲突：跳过、替换文件、保留两份；已有目录不能递归覆盖。
+- 回收站、恢复、确认后永久删除。
+- 后台任务进度与取消；上传进度与取消。
+- PNG/JPEG/GIF/WebP 图片和不超过 1 MiB 的 UTF-8 文本预览。
+- 宿主机或 Samba 修改文件后，刷新即可看到实际目录状态。
+
+## 本地运行
+
+需要 Go 1.26 和 Node.js 24；也可以先运行 `nix develop path:.`。
+
+```sh
+npm --prefix web ci
+npm --prefix web run build
+go build -o /tmp/nixos-webui ./cmd/webui
+mkdir -p "$HOME/webui-data/documents" "$HOME/webui-data/media" \
+  "$HOME/.local/state/nixos-webui" "$HOME/.config/nixos-webui"
+chmod 700 "$HOME/.local/state/nixos-webui" "$HOME/.config/nixos-webui"
+# 输入至少 6 字节的管理员密码；局域网测试可使用短密码，长期部署建议至少 12 字节。不要提交密码。
+read -rs -p 'Administrator password: ' WEBUI_PASSWORD
+printf '\n'
+(umask 077; printf '%s' "$WEBUI_PASSWORD" > "$HOME/.config/nixos-webui/password")
+unset WEBUI_PASSWORD
+```
+
+创建 `$HOME/.config/nixos-webui/config.json`，将以下 `/home/alice` 替换为实际用户主目录的绝对路径。配置、密码和持久状态均放在允许共享的范围之外；不要把状态目录放在 `/tmp`，也不要在重新部署时删除它。
+
+```json
+{
+  "ip": "127.0.0.1",
+  "port": 8080,
+  "stateDir": "/home/alice/.local/state/nixos-webui",
+  "passwordFile": "/home/alice/.config/nixos-webui/password",
+  "secureCookies": false,
+  "allowedRoots": [
+    {"path": "/home/alice/webui-data/documents"},
+    {"path": "/home/alice/webui-data/media", "readOnly": true}
+  ],
+  "shares": [
+    {"id": "documents", "name": "文档", "path": "/home/alice/webui-data/documents"},
+    {"id": "media", "name": "媒体", "path": "/home/alice/webui-data/media", "readOnly": true}
+  ]
+}
+```
+
+```sh
+/tmp/nixos-webui -config "$HOME/.config/nixos-webui/config.json" -static ./web/dist
+```
+
+### 配置参数
+
+| 字段 | 类型 | 用途 |
+| --- | --- | --- |
+| `ip` | 字符串 | 必填，监听 IPv4 或 IPv6 地址；局域网使用 `0.0.0.0`，IPv6 如 `::1`，不加方括号。 |
+| `port` | 整数 | 必填，监听端口，范围 `1–65535`。 |
+| `password` | 字符串 | 直接设置管理员密码，至少 6 字节；与 `passwordFile` 二选一。 |
+| `passwordFile` | 字符串 | 从运行时文件读取密码，末尾换行会被去除；正式部署推荐。 |
+| `allowedRoots` | 数组 | 必填且非空，部署控制的目录边界；每项包含已有绝对目录 `path` 和可选 `readOnly`（默认 `false`）。管理员只能在这些根目录内配置共享。 |
+| `shares` | 数组 | 可选，仅作状态数据库首次初始化时的导入；可为空。每项包含 `name`、`path`，可选 `id` 和 `readOnly`（默认 `false`）。以后不再与保存的共享列表同步。 |
+| `stateDir` | 字符串 | 必填，固定、私有的持久状态目录绝对路径，必须与所有允许根目录互不重叠；共享配置保存在此处的 SQLite 数据库中。 |
+| `secureCookies` | 布尔值 | 可选，默认 `false`；HTTPS 部署设置为 `true`。 |
+
+直接配置密码时，将示例中的 `passwordFile` 替换为 `"password": "your-password"`，不要同时设置两者。密码按原样使用，包含空格也不会被裁剪。配置文件和密码文件必须放在所有允许根目录之外，设为 `0600`，不要提交到仓库或写入 Nix store。NixOS 模块只接受运行时密码文件，不提供明文密码选项。
+
+允许根目录必须是规范化、互不重叠的已有绝对目录：不能为 `/`，不能有尾部 `/`、重复分隔符、`.` 或 `..` 路径段，也不能经过符号链接。根目录与状态目录、密码文件不能重叠。共享可以使用整个允许根目录或其中的子目录；共享之间不能重叠，不能位于允许范围之外；只读根目录内的共享不能设置为可写。
+
+初次初始化 `stateDir/state.sqlite` 时导入 `shares`，保留显式 ID。省略 ID 时根据规范化绝对路径生成稳定 ID，调整初始数组顺序或显示名称不会改变 ID。即使初始 `shares` 为空，也会写入首次导入标记；后续修改配置中的 `shares`、重启、重新部署或回滚 NixOS generation 都不会重新导入或覆盖管理员保存的列表。已有部署应保留原 ID，以维持任务和回收站元数据关联；页面编辑既有共享也保留 ID。请备份和保留状态数据库，不要通过删除它来重置配置。
+
+页面「共享设置」保存的名称、路径和只读属性立即生效，移除共享只删除配置，不删除目录或文件。任意正在处理的文件请求（包括上传、下载）都会暂时阻止所有共享保存与移除；受影响共享有活动后台任务时，也不能保存（包括仅修改名称）或移除。未清空的回收站会阻止路径变更和移除。这些冲突返回 HTTP 409；等待请求结束、完成或取消相关任务、处理回收站后再操作。目录选择器只能列出允许根目录及其子目录，不跟随符号链接，也不能浏览任意系统路径。
+
+共享设置直接展示共享列表与编辑区，不再单列顶部目录范围说明；「浏览允许的目录」下拉选项在路径后标明「允许读写」或「仅限只读」。外层滚动条隐藏，仍可通过滚轮、触摸或键盘访问完整表单；目录列表保留独立滚动。
+
+点击「浏览目录」打开独立的大尺寸目录选择弹框，目录列表随屏幕高度伸展，手机和横屏也保持底部操作可见。进入子目录后点击「选择当前目录」回填路径；取消或 Esc 只关闭选择弹框，保留原有路径及尚未保存的共享表单。
+
+修改 `allowedRoots`、监听地址、端口或其他运行时配置后需重启；访问端口变更时也需修改 URL。若部署收紧边界、改为只读或共享目录暂时不可访问，已保存但不再符合条件的共享不会被删除或自动迁移，而是保留并标记为不可用，文件操作关闭。管理员可在「共享设置」查看原因并修正路径或权限，恢复边界后重新加载；配置中的初始列表不会替代它们。
+
+
+打开 <http://127.0.0.1:8080>。开发前端时另开终端运行 `npm --prefix web run dev`，Vite 将 `/api` 代理到 `127.0.0.1:8080`。
+
+## Nix 打包
+
+```sh
+nix build path:.#default
+./result/bin/nixos-webui -config "$HOME/.config/nixos-webui/config.json"
+```
+
+包内包含前端静态资源，运行时无需 Node.js。flake 支持 `x86_64-linux` 和 `aarch64-linux`。更新 Go 依赖后运行 `go mod tidy`，更新 `nix/vendor-hash.nix` 为 Nix 报告的真实 vendor hash；不能提交发现用假哈希。前端依赖由 `package-lock.json` 的 integrity 字段固定，Nix 使用 `importNpmLock`。
+
+## NixOS 服务
+
+在系统 flake 的 inputs 中加入本项目，将 `inputs.webui.nixosModules.default` 放入主机 modules。使用本地目录时可指定 `webui.url = "path:/absolute/path/to/WebUIForNixos";`。
+
+```nix
+{ inputs, ... }:
+{
+  imports = [ inputs.webui.nixosModules.default ];
+
+  users.groups.documents = {};
+  services.nixos-webui = {
+    enable = true;
+    ip = "127.0.0.1";
+    port = 8080;
+    passwordFile = "/run/secrets/nixos-webui-password";
+    stateDir = "/var/lib/nixos-webui";
+    supplementaryGroups = [ "documents" ];
+    allowedRoots = [
+      { path = "/srv/documents"; }
+      { path = "/srv/archive"; readOnly = true; }
+    ];
+    # 仅在首次创建状态数据库时导入；之后由管理员在页面管理。
+    shares = {
+      documents = { name = "文档"; path = "/srv/documents"; };
+      archive = { name = "归档"; path = "/srv/archive"; readOnly = true; };
+    };
+  };
+}
+```
+
+允许根目录和首次导入的共享目录必须已经存在；首次导入也可使用 `shares = {};`，管理员登录后再添加共享。管理员负责目录组权限或 ACL；服务不会递归修改所有权。例如新建专用目录时可由管理员执行 `install -d -m 2770 -g documents /srv/documents /srv/archive`。已有数据不要直接递归 `chown`。只读根目录及只读共享也需要服务用户拥有读取及目录遍历权限。模块以 `0700` 创建独立的 `/var/lib/nixos-webui`，保留其中的数据库才能保留共享设置、任务和回收站元数据。
+
+密码通过 systemd `LoadCredential` 传给固定的非 root 用户 `nixos-webui`。源密码文件可以保持 root:root、0600。**必须使用运行时路径字符串，不要用 Nix 路径字面量或 `writeText` 把密码放进 Nix store。** 修改密码后重启服务；如需撤销已有会话，先停止服务再删除状态数据库中的 `sessions` 记录。
+
+NixOS 模块使用 `ip`、`port` 和 `passwordFile`；不提供明文 `password` 选项，避免声明式配置把秘密写入公开的 Nix store。`allowedRoots` 是路径及只读属性的列表，随部署生成运行时 JSON，并决定 systemd 的 `ReadWritePaths`、`ReadOnlyPaths` 和根目录挂载依赖；挂载依赖还包括状态目录及密码源文件。`shares` 保持以 ID 为键的属性集，仅转换为首次导入数组，不决定沙箱路径，也不与数据库协调。修改初始 `shares` 不会恢复已移除共享或覆盖页面保存的设置。
+
+每个共享的 `readOnly` 由 API 强制执行；同一可写允许根目录中的只读共享不会单独变成 systemd 只读挂载。需要 OS 层只读保护时，为对应目录配置 `allowedRoots` 的 `readOnly = true`；该根目录内所有共享都必须只读。
+
+```sh
+sudo nixos-rebuild switch --flake /path/to/system-flake
+systemctl status nixos-webui
+journalctl -u nixos-webui
+```
+
+模块不会自动开放防火墙。局域网访问推荐使用 HTTPS 反向代理，同时设置 `services.nixos-webui.secureCookies = true`。代理应保留原始 Host，并支持 SSE：关闭 `/api/events` 的代理缓冲、设置长连接超时；根据需求设置上传大小限制。不要把接口或静态目录部署到不同源。
+
+## 共享设置 API
+
+这些接口使用与文件操作相同的管理员登录鉴权；写接口需要 CSRF 校验。
+
+- `GET /api/shares`：文件浏览使用的共享列表，返回 `{id,name,readOnly}` 数组，不暴露宿主路径。
+- `GET /api/settings/shares`：返回 `{shares,allowedRoots}`；共享项包含 `id`、`name`、`path`、`readOnly`、`available` 和可选 `error`，包括不可用的已保存项。允许根目录包含 `path`、`readOnly`。
+- `POST /api/settings/shares/save`：提交 `{id?,name,path,readOnly}`，省略 ID 创建共享，提供 ID 编辑既有共享；成功返回 `{ok:true}`。任何活动文件请求、该共享的活动后台任务，或路径变更时尚有回收站条目，均返回 `409`。
+- `POST /api/settings/shares/remove`：提交 `{id}`，仅移除共享配置，成功返回 `{ok:true}`；任何活动文件请求、该共享的活动后台任务或回收站条目，均返回 `409`。
+- `GET /api/settings/directories?root=<allowed-root-absolute>&path=<relative-path>`：URL 编码参数，返回 `{path,entries:[{name,path}]}`，其中返回路径为绝对目录路径。`root` 必须匹配声明的允许根目录，`path` 在其内部，不遍历符号链接。
+
+## 高级设置 API
+
+- `GET /api/settings/files`：返回 `{showHidden,columns:[{key,visible}],sort:{key,ascending}}`。九个列键为 `name`、`size`、`modified`、`type`、`extension`、`permissions`、`owner`、`group`、`created`，数组顺序即显示顺序；回收站中修改时间、类型分别显示为删除时间、原始位置。旧版有效四列配置会自动迁移并持久化，保留顺序、显示状态及排序，追加五个隐藏列；迁移不会覆盖并发保存的新配置。
+- `POST /api/settings/files/save`：提交同一完整九列文档，成功返回已保存文档。必须提供九个不重复的列键且名称列可见；缺失、未知或无效字段返回 `400`，原设置不变。写入失败不会返回保存成功；四列旧文档仅用于已存配置迁移，不再接受旧格式写入。
+- 接口要求管理员会话，写入沿用同源及 CSRF 校验。单管理员全局设置以 JSON 文档原子保存到 `stateDir/state.sqlite` 的 `settings_meta.file_view`，不写只读部署配置或 Nix store。首次没有记录时默认不显示隐藏项目、显示原四列、隐藏新增五列、名称升序且文件夹优先；读取失败或已保存配置损坏返回错误，不静默覆盖为默认值。
+- `GET /api/files` 与 `GET /api/trash` 条目增加 `extension`、`permissions`、`owner`、`group`、`created`；创建时间为 RFC3339 或 `null`。扩展名取最后一个非空后缀并保留大小写（`archive.tar.gz` 为 `gz`），文件夹及无后缀 dotfile 无扩展名。符号链接读取链接本身，不读取目标；回收站使用保留对象元数据及原始文件名。Linux `statx` 通过目录描述符不跟随链接，缺少支持时退回 `fstatat` 且不伪造创建时间。
+
+## 文件操作与安全边界
+
+- 文件操作 API 只接受共享目录 ID 和相对路径，使用 Go `os.Root` 限制路径解析；禁止 `..`、绝对路径及内部 `.webui-*` 路径。共享管理 API 接受绝对路径，但只允许部署声明的 `allowedRoots` 边界内的目录。
+- 符号链接可显示，但不允许进入、下载、预览或复制；移动、重命名和回收站操作处理链接本身。
+- 只操作普通文件和目录；复制不保留 Unix 所有者、ACL、扩展属性、硬链接关系或原始时间。新文件模式 0640、目录 0750，仍受部署 UMask/ACL 影响。
+- `os.Root` 不是完整隔离容器，不能防止管理员挂载点或已有硬链接造成的数据暴露。只配置可信允许根目录，配合服务用户权限和 systemd 沙箱。系统路径、重叠共享、共享根目录删除均被拒绝；范围外或不可用共享的文件操作失败关闭。
+- 上传和复制先写目标目录内的隐藏临时文件，再提交；不静默覆盖。取消当前复制会清除其暂存内容，已完成项不会回滚。宿主机异常中断可能留下隐藏临时文件，确认无任务运行后可由管理员清理 `.webui-upload-*`。
+- 同文件系统移动使用原子 rename；跨文件系统移动先复制后删除源，不是整体事务。中途失败可能同时保留源与目标，应检查后决定如何重试。
+- 一个批量任务按顶层条目计数，不是字节进度。任务完成和失败持久化；重启时未完成任务标记中断，不自动重放。
+- 回收站位于每个共享根目录的 `.webui-trash`，占用该文件系统空间；元数据在 `stateDir/state.sqlite`。备份与恢复应同时包含共享文件、隐藏回收站和状态数据库。回收站不是独立备份。
+- 文本以纯文本展示，上传的 HTML/SVG 不会作为页面执行。会话 Cookie 使用 HttpOnly、SameSite=Strict；HTTPS 部署应启用 Secure。
+- 单管理员模型：所有文件操作使用服务账户，不映射多个 Linux 用户，不修改 NixOS 配置，不执行 `nixos-rebuild`。
+- 可执行程序拒绝以 root 启动；启动时要求前端构建产物存在。
+- NixOS generation 回滚不会撤销文件删除、覆盖或数据库变更。
+
+## 验证
+
+```sh
+go test -race ./...
+go vet ./...
+npm --prefix web run build
+nix build path:.#default
+```
+
+本次共享设置变更已通过 `go test -race ./...`、`go vet ./...`、前端生产构建及 `nix build path:.#default --no-link`。真实进程和 Chromium 验证了空共享启动、目录选择、创建/改名/只读切换/移除、390px 手机布局、重启与部署初始配置修改不覆盖设置、稳定 ID、移除后磁盘文件保留、收紧部署边界后共享保留且访问被拒绝，以及页面修正不可用共享。真实未完成 HTTP 上传期间修改返回 409，真实回收站操作后移除返回 409；回归测试覆盖排队后台任务的源和目标共享保护、空列表不重新导入、目录越界和符号链接拒绝。NixOS 模块已求值验证根目录级沙箱路径和凭据配置，但未切换宿主机系统服务。
+高级设置已通过服务器测试、前端生产构建和 Nix 打包。真实局域网服务与 Chromium 验证了隐藏项目、列隐藏及顺序调整、名称降序、刷新与实际进程重启后保留、取消不保存、390px 列表横向滚动及网格显示、手机设置弹框，以及断网保存失败不修改已存配置。验证后恢复原有显示设置。
+
+
+当前局域网服务使用打包程序；私有数据库已迁移到 `/var/lib/nixos-webui/state/state.sqlite`，密码文件位于 `/var/lib/nixos-webui/password`，目录权限 `0700`、密码文件 `0600`，归运行账户 `nixos:users` 所有。迁移先停服务并完成 SQLite WAL checkpoint，再移动完整状态目录和密码文件、更新配置后启动；已验证文件哈希一致、数据库完整性及共享/会话/回收站/任务/首次导入标记保留，原临时目录已移除。实际局域网登录、共享设置和已有上传文件访问正常，共享越界访问私有路径被拒绝。正式 NixOS 系统服务使用模块管理的服务账户，切换时应迁移完整数据库并调整私有目录所有者，不得丢弃数据库。

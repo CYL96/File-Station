@@ -1,0 +1,9 @@
+web/node_modules/
+web/dist/
+result
+result-*
+.direnv/
+config.json
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
