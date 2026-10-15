@@ -7,9 +7,10 @@ import { columnLabels } from './FileSettings';
 type DropPosition = { key: FileColumnKey; after: boolean };
 type ColumnGeometry = { key: FileColumnKey; left: number; width: number; cells: HTMLElement[] };
 type DragGhost = { label: string; left: number; top: number; width: number; height: number; settling: boolean };
-export function FileTableHeader({ columns, sort, trash, busy, selection, onSort, onReorder }: {
-  columns: FileSettings['columns']; sort: FileSort; trash: boolean; busy: boolean; selection: ReactNode;
+export function FileTableHeader({ columns, layout, sort, trash, busy, selection, onSort, onChangeSort, onReorder }: {
+  columns: FileSettings['columns']; layout: 'list' | 'grid'; sort: FileSort; trash: boolean; busy: boolean; selection: ReactNode;
   onSort: (key: FileColumnKey) => void;
+  onChangeSort: (sort: FileSort) => void;
   onReorder: (source: FileColumnKey, target: FileColumnKey, after: boolean) => Promise<void>;
 }) {
   const gesture = useRef<{ key: FileColumnKey; x: number; pointer: number; moved: boolean; offset: number; scroll: number; geometry: ColumnGeometry[] } | null>(null);
@@ -21,6 +22,7 @@ export function FileTableHeader({ columns, sort, trash, busy, selection, onSort,
   const previewCells = useRef<HTMLElement[]>([]);
   const header = useRef<HTMLDivElement>(null);
   const settling = useRef(false);
+  const labels = trash ? { ...columnLabels, modified: '删除时间', type: '原始位置' } : columnLabels;
   function clearPreview() {
     for (const cell of previewCells.current) {
       cell.style.removeProperty('--column-shift');
@@ -75,8 +77,15 @@ export function FileTableHeader({ columns, sort, trash, busy, selection, onSort,
   }
   return <><div ref={header} className={`table-header ${source ? 'column-drag-active' : ''}`} role="row" aria-busy={busy}>
     <div role="columnheader" className="check-cell">{selection}</div>
-    {columns.map(column => {
-      const label = trash && column.key === 'modified' ? '删除时间' : trash && column.key === 'type' ? '原始位置' : columnLabels[column.key];
+    {layout === 'grid' ? <div role="columnheader" className="grid-sort-cell">
+      <select className="grid-sort-select" aria-label="排序" disabled={busy} value={`${sort.key}:${sort.ascending ? 'asc' : 'desc'}`} onChange={event => {
+        const [key, direction] = event.target.value.split(':');
+        onChangeSort({ key: key as FileColumnKey, ascending: direction === 'asc' });
+      }}>
+        {(Object.keys(labels) as FileColumnKey[]).flatMap(key => [true, false].map(ascending => <option key={`${key}:${ascending ? 'asc' : 'desc'}`} value={`${key}:${ascending ? 'asc' : 'desc'}`}>排序：{labels[key]}{ascending ? '升序' : '降序'}</option>))}
+      </select>
+    </div> : columns.map(column => {
+      const label = labels[column.key];
       return <div key={column.key} role="columnheader" data-column={column.key} aria-sort={sort.key === column.key ? sort.ascending ? 'ascending' : 'descending' : 'none'} className={`column-${column.key} draggable-column ${source === column.key ? 'column-drag-source' : ''} ${drop?.key === column.key ? drop.after ? 'column-drop-after' : 'column-drop-before' : ''}`}>
         <button disabled={busy} title={`${label}：点击排序，左右拖动调整列顺序；Alt + 左右键也可移动`} onClick={event => {
           if (performance.now() < suppressClick.current || settling.current) { event.preventDefault(); return; }
@@ -92,7 +101,7 @@ export function FileTableHeader({ columns, sort, trash, busy, selection, onSort,
           if (event.button !== 0 || busy || !event.isPrimary || settling.current) return;
           const table = header.current?.closest('.file-table');
           if (!table || !header.current) return;
-          const rows = table.classList.contains('grid-table') ? [] : Array.from(table.querySelectorAll<HTMLElement>('.file-row'));
+          const rows = Array.from(table.querySelectorAll<HTMLElement>('.file-row'));
           const geometry = Array.from(header.current.querySelectorAll<HTMLElement>('[data-column]'), (node, index) => {
             const bounds = node.getBoundingClientRect();
             return { key: node.dataset.column as FileColumnKey, left: bounds.left, width: bounds.width, cells: [node, ...rows.map(row => row.children[index + 1] as HTMLElement)] };

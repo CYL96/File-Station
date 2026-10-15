@@ -1,109 +1,236 @@
-# NixOS File Station
+# File Station
 
-面向 NixOS 的单管理员 Web 文件管理器，使用 React + TypeScript 前端、Go HTTP 服务和 SQLite 持久状态。文件内容直接保留在共享目录中，不导入数据库；宿主机或 Samba 修改文件后，刷新即可查看实际目录状态。
+单管理员 Web 文件管理器，支持普通 Linux 用户、Docker 和 NixOS 部署。React + TypeScript 前端、Go HTTP 服务和 SQLite 持久状态；文件内容直接留在共享目录，宿主机或 Samba 修改文件后刷新即可查看。
 
-应用以非 root 服务账户操作文件，不提供多用户 Linux 身份映射、root 权限或 NixOS 系统管理能力，也不会修改系统配置或执行 `nixos-rebuild`。
+应用必须以非 root 用户运行，不提供多用户 Linux 身份映射、提权或系统管理能力。**首次启动默认零共享，不自动共享 home、挂载目录或任何其他路径。** 登录后在「共享设置」手动添加目录；容器中需先挂载，再添加容器内路径。
 
 ## 主要功能
 
-- 管理员密码登录、12 小时会话、退出和 CSRF 防护。
-- 多共享目录浏览与管理，支持只读共享、搜索当前目录名称、排序、多选、列表/网格视图；可在「高级设置」勾选显示列并保存。列表表头与内容使用一致列宽，窄屏下可横向滚动查看其余列。
-- 新建文件夹、重命名、复制、移动、上传、下载、计算大小；同名冲突可跳过、替换文件或保留两份。
-- 回收站、恢复与确认后永久删除；后台任务、上传进度、取消及失败重试。
+- 密码登录、12 小时会话、退出及 CSRF 防护。
+- 多共享管理、只读共享、当前目录名称搜索、排序、多选、列表/网格视图、自定义显示列；网格视图在全选框旁选择排序字段及升降序，列表视图点击列标题排序；列表窄屏可横向滚动。
+- 新建文件夹、重命名、复制、移动、上传、下载和计算大小；同名冲突可跳过、替换文件或保留两份。
+- 回收站、恢复、确认后永久删除；后台任务、上传进度、取消和失败重试。
 - PNG/JPEG/GIF/WebP 图片预览，以及不超过 1 MiB 的 UTF-8 文本预览与编辑。
-- Markdown 渲染、源码编辑、源码与预览对照、可视化编辑。可视化修改会重新序列化 Markdown，可能规范化空格、列表、表格或不支持的语法；需要逐字保留时使用源码编辑。
+- Markdown 渲染、源码与预览对照和可视化编辑。可视化保存会重新序列化 Markdown，可能规范化空格、列表、表格或不支持的语法；需要逐字保留时使用源码编辑。
 
-任务中心中可重试的失败条目提供「重试」按钮。复制、移动和移至回收站任务只重试尚未完成的项目，创建新任务并保留原失败记录；复制和移动可重新选择同名项目处理方式。重试参数会持久保存，刷新页面或重启服务后仍可使用；升级前未保存参数的历史失败任务需重新发起操作。上传失败可在当前页面内重试到原目标目录，刷新页面或退出登录后需重新选择文件。
+任务中心的复制、移动和回收站失败条目可重试尚未完成的项目，创建新任务并保留原记录；复制和移动可重新选择冲突处理方式。已保存的重试参数在刷新、重启后仍可用，旧版未保存参数的历史任务需重新发起。上传失败可在当前页面内重试，刷新或退出登录后需重新选择文件。
 
-## 本地安装与运行
+## 本地构建与运行
 
-需要 Go 1.26、Node.js 24 和 npm；也可以运行 `nix develop path:.` 进入开发环境。以下命令在仓库根目录的 Bash 中执行，使用普通用户，不要用 root 启动程序。
+需要 Linux、Go 1.26、Node.js 24 和 npm，也可用 `nix develop path:.`。在仓库根目录使用普通用户：
 
 ```sh
 npm --prefix web ci
 npm --prefix web run build
-go build -o /tmp/nixos-file-station ./cmd/nixos-file-station
+go build -o /tmp/file-station ./cmd/file-station
 
-mkdir -p "$HOME/file-station-data/documents" "$HOME/file-station-data/media" \
-  "$HOME/.local/state/nixos-file-station" "$HOME/.config/nixos-file-station"
-chmod 700 "$HOME/.local/state/nixos-file-station" "$HOME/.config/nixos-file-station"
-
-# 密码至少 6 字节；长期部署建议至少 12 字节。不要提交密码。
-read -rs -p 'Administrator password: ' FILE_STATION_PASSWORD
+mkdir -p "$HOME/.config/file-station" "$HOME/.local/state/file-station"
+chmod 700 "$HOME/.config/file-station" "$HOME/.local/state/file-station"
+read -rs -p 'Administrator password: ' password
 printf '\n'
-(umask 077; printf '%s' "$FILE_STATION_PASSWORD" > "$HOME/.config/nixos-file-station/password")
-unset FILE_STATION_PASSWORD
+(umask 077; printf '%s' "$password" > "$HOME/.config/file-station/password")
+unset password
 ```
 
-创建 `$HOME/.config/nixos-file-station/config.json`。将以下所有 `/absolute/home` 替换为 `$HOME` 对应的实际绝对路径；JSON 不展开环境变量。
+创建 `$HOME/.config/file-station/config.json`，将 `/absolute/home` 替换成实际绝对路径；JSON 不展开环境变量：
 
 ```json
 {
   "ip": "127.0.0.1",
   "port": 8080,
-  "stateDir": "/absolute/home/.local/state/nixos-file-station",
-  "passwordFile": "/absolute/home/.config/nixos-file-station/password",
+  "stateDir": "/absolute/home/.local/state/file-station",
+  "passwordFile": "/absolute/home/.config/file-station/password",
+  "umask": "0022",
   "secureCookies": false,
-  "allowedRoots": [
-    {"path": "/absolute/home/file-station-data/documents"},
-    {"path": "/absolute/home/file-station-data/media", "readOnly": true}
-  ],
-  "shares": [
-    {"id": "documents", "name": "文档", "path": "/absolute/home/file-station-data/documents"},
-    {"id": "media", "name": "媒体", "path": "/absolute/home/file-station-data/media", "readOnly": true}
-  ]
+  "shares": []
 }
 ```
 
 ```sh
-chmod 600 "$HOME/.config/nixos-file-station/config.json" "$HOME/.config/nixos-file-station/password"
-/tmp/nixos-file-station -config "$HOME/.config/nixos-file-station/config.json" -static ./web/dist
+chmod 600 "$HOME/.config/file-station/config.json" "$HOME/.config/file-station/password"
+/tmp/file-station -config "$HOME/.config/file-station/config.json" -static ./web/dist
 ```
 
-打开 <http://127.0.0.1:8080>。程序启动时必须能找到前端构建产物；上面的 `-static` 指向本地构建目录。
+打开 <http://127.0.0.1:8080>，在「共享设置」添加已有目录。也可在 JSON 中用 `password` 直接填写密码，并删除 `passwordFile`；两者必须恰有一个非空来源。
 
-## 配置规则
+## 配置文件与环境变量：两种独立来源
 
-### 监听与密码
+本地和 NixOS 推荐使用配置文件，Docker 默认直接通过 `PASSWORD` 填写密码；不自动探测部署环境，也不混合两种业务配置来源：
 
-- `ip` 和 `port` 必填，端口范围为 `1–65535`。`ip` 使用 IPv4 或 IPv6 地址，IPv6 不加方括号。`127.0.0.1` 仅本机访问，`0.0.0.0` 监听所有 IPv4 接口。
-- `passwordFile` 指向运行时密码文件，读取时去除末尾换行。也可改用 `password` 字符串，但两者必须二选一；密码至少 6 字节，其他空格按原样使用。
-- 配置和密码文件必须位于所有允许根目录之外，权限设为 `0600`，不要提交到仓库或写入 Nix store。正式部署推荐使用密码文件；NixOS 模块只接受密码文件。
-- `secureCookies` 默认 `false`；通过 HTTPS 访问时设置为 `true`。
+- **文件模式**：通过 `-config /absolute/config.json` 或大小写精确的 `ConfigPath` 选中非空路径后，仅使用**内置默认值 + JSON 文件**。完全忽略 `PASSWORD` 和 `UMASK`，包括空值、非法值；它们既不覆盖文件，也不补齐缺失字段。文件读取失败、JSON 无效、含未知字段或多余 JSON 值时启动失败。
+- **环境变量模式**：未选择非空配置文件路径时，仅从 `PASSWORD`、`UMASK` 获取业务配置；固定监听 `0.0.0.0:8080`，状态目录为 `/var/lib/file-station`，首次零共享，`secureCookies` 为 `false`。没有环境变量可修改这些固定值，需要自定义时使用 JSON。
 
-### 允许目录与持久状态
+`-config` 优先于 `ConfigPath`，即使显式传空字符串也优先，因此 `-config ''` 可取消环境变量指定的配置文件。静态目录**仅由 `-static` 指定**，默认 `web/dist`，必须存在前端构建产物；Nix 包装器和 Docker 镜像命令已指定包内绝对路径，静态目录不属于 JSON 配置。
 
-- `allowedRoots` 必填且非空，是部署方允许管理员使用的目录边界。每项包含 `path` 和可选的 `readOnly`（默认 `false`）。
-- 允许根目录必须是已经存在、互不重叠的规范化绝对目录：不能为 `/`，不能有尾部 `/`、重复分隔符、`.` 或 `..` 路径段，也不能经过符号链接。
-- 共享可使用允许根目录或其子目录，但共享之间不能重叠；只读根目录内的共享不能设为可写。服务账户必须有相应的读取、目录遍历及写入权限。
-- `stateDir` 必填，使用固定、私有的持久状态绝对路径，与所有允许根目录互不重叠。目录权限应为 `0700`；不要放在 `/tmp`，不要在重新部署时删除。共享设置、任务、会话及回收站元数据保存在其中的 SQLite 数据库中。
+| JSON 字段（仅文件模式） | 内置默认值及说明 |
+| --- | --- |
+| `ip` | `127.0.0.1`；IPv4/IPv6 地址，不带端口或 IPv6 方括号；`0.0.0.0` 监听所有 IPv4 接口 |
+| `port` | `8080`；整数 `1–65535` |
+| `stateDir` | `/var/lib/file-station`；独立、私有、持久的绝对目录，普通用户通常需覆盖此值 |
+| `password` | 无默认密码，与 `passwordFile` 必须恰有一个非空来源；至少 6 字节，建议至少 12 字节 |
+| `passwordFile` | 运行时密码文件绝对路径；读取时去除末尾换行，其他空格保留 |
+| `passwordSourceFile` | 默认空；高级部署元数据，额外禁止共享覆盖原始密码源路径，不读取该文件，也不作为认证密码来源 |
+| `umask` | `"0022"`；必须是 3 或 4 位八进制字符串，值为 `0000`–`0777`；不能用 JSON 数字或空字符串 |
+| `secureCookies` | `false`；HTTPS 部署设为 `true` |
+| `shares` | `[]`；可选首次导入，共享设置之后保存在状态数据库 |
 
-### 共享管理与重启
+Docker 部署仅使用以下五项环境变量，不提供旧名或其他短名别名：
 
-`shares` 是可选的首次导入配置，可为空。每项包含 `name`、`path`，以及可选的 `id`、`readOnly`。仅在状态数据库首次初始化时导入一次；即使最初为空，之后修改该配置、重启、重新部署或回滚 NixOS generation 都不会重新导入。已有部署应保留共享 ID 和状态数据库，避免破坏任务及回收站元数据关联。
+| 环境变量 | 默认值及说明 |
+| --- | --- |
+| `PUID` | root 入口默认 `1000`；UID 必须为 `1`–`4294967294` 的十进制整数，无前导零，显式空值无效；不是应用配置 |
+| `PGID` | root 入口默认 `1000`；GID 格式同上；不是应用配置 |
+| `UMASK` | `"0022"`；格式与 JSON `umask` 相同，显式空值无效；文件模式完全忽略 |
+| `PASSWORD` | 无默认密码；环境变量模式必填，至少 6 字节，建议至少 12 字节；文件模式完全忽略 |
+| `ConfigPath` | 默认空，非空时选择容器内 JSON 配置文件；注意大小写 |
 
-后续通过页面的「共享设置」新增、编辑与移除共享，保存立即生效并持久化。移除共享只删除配置，不删除目录或文件。以下情况会返回 HTTP 409，需先解除冲突：
+`passwordSourceFile` 用于 NixOS `LoadCredential` 等将原密码复制到私有凭据路径的部署：`passwordFile` 指向实际读取的凭据，`passwordSourceFile` 仅保护原始绝对路径及可解析的真实路径，避免共享其祖先目录。服务无须有权读取或遍历原始密码文件；无法解析的部分按已知绝对路径和可解析祖先尽力保护，不因此拒绝启动。该隐私元数据在每次启动时生效，不是 `shares` 的一次性导入；调整认证密码来源不会自动清除它。确需移除时，在 JSON 中删除或清空 `passwordSourceFile`。
 
-- 任何文件请求（包括上传、下载）正在处理时，所有共享保存与移除都会暂时被阻止。
-- 受影响共享有活动后台任务时，不能保存或移除，包括仅修改名称；等待任务结束或取消后再操作。
-- 受影响共享的回收站未清空时，不能变更路径或移除；先恢复或永久删除其中的条目。
+密码文件和含密码的配置文件应为 `0600`，放在所有共享之外，不提交仓库。Docker 可以直接填写 `PASSWORD`，但明文环境变量及 Compose 配置可被 `docker inspect` 或有权限的宿主管理员读取；不要将密码提交版本库、写入镜像层或 Nix store。需要减少环境变量暴露时可选只读 JSON 文件模式。本地可继续使用 `passwordFile`，NixOS 必须使用运行时密码文件。修改监听、密码、umask 和其他启动配置后需要重启；页面保存共享不需要重启。
 
-修改 `allowedRoots`、监听地址、端口、密码或其他运行时配置后需要重启；端口变更后同步修改访问 URL。页面保存共享设置不需要重启。
+### 目录权限与持久状态
 
-收紧允许范围、改为只读或目录暂时不可访问时，不符合条件的已保存共享会保留并标记为不可用，文件操作关闭，不会自动删除或迁移。可在「共享设置」查看原因并修正路径或权限；初始 `shares` 不会覆盖这些记录。
+没有 `allowedRoots` 人工白名单，也没有固定的 `/etc`、`/nix` 路径黑名单。目录选择器从 `/` 浏览，列出进程能读取和遍历的目录；是否能添加、读写共享取决于**服务进程实际 UID、主组/附加组、Unix 权限、ACL 和挂载选项**。每一级父目录都需遍历权限，列目录需读权限，写操作还需相应的写权限。应用不会以登录浏览器用户的身份执行文件操作，也不会自动 `chown` 共享数据。
 
-## Nix 打包
+共享必须是已经存在、可访问且互不重叠的目录；共享根路径会规范化并解析宿主符号链接，进入共享后的文件操作仍禁止跟随符号链接。`readOnly` 是额外的应用级限制，不能授予操作系统原本没有的权限；若需操作系统级只读保护，用只读挂载或 ACL。目录选择器可以浏览 `/`，不代表可以共享 `/`：任何覆盖私有状态或密码文件的宽泛祖先目录都不能添加为共享。
+
+`stateDir` 权限为 `0700`，必须属于运行 UID，与共享互不重叠，不能放在临时目录或随部署删除。SQLite 保存共享设置、任务、会话和回收站元数据。将整个 home 设为共享可能因其中包含状态/密码而被拒绝，应选择具体数据子目录。配置文件若含内联密码，也必须由管理员放在共享之外。
+
+### 首次导入与共享管理
+
+`shares` 仅在状态数据库首次初始化时导入一次，即使最初为空也会记录初始化；以后修改 JSON、重启或回滚 NixOS generation 都不会覆盖已保存共享。环境变量模式不提供首次导入项。可选 JSON 导入格式如下，通常无需配置：
+
+```json
+[{"id":"documents","name":"文档","path":"/srv/documents","readOnly":false}]
+```
+
+每项必需 `name`、`path`，`id` 可省略自动生成，`readOnly` 默认 `false`。保留已有状态数据库和共享 ID，避免破坏任务与回收站关联。
+
+后续在「共享设置」新增、编辑和移除，保存立即生效；移除只删除配置，不删除目录内容。任何文件请求（含上传、下载）处理中，共享变更暂时返回 HTTP 409；受影响共享有活动后台任务时也不可修改或移除。回收站非空时不能变更路径或移除，需先恢复或永久删除。目录丢失、挂载未就绪或权限不足时，已保存共享保留并标为不可用，不自动删除或迁移。
+
+## Docker / Compose
+
+镜像使用 Node.js 24 和 Go 1.26 多阶段构建，最终包含 Alpine、CA 证书、`su-exec`、静态 Go 程序和前端，运行时不需要 Node.js 或 Go。入口脚本短暂以 root 校验 `PUID` / `PGID`（未设置时默认 `1000:1000`），只调整私有状态目录本身的属主，随后通过 `su-exec` 降权；Go 服务再以该非 root 身份将状态目录权限设为 `0700`。**应用进程始终以非 root 身份运行**，不递归更改已有状态内容，更不更改共享数据。直接传入 `docker run -e PUID=… -e PGID=…` 即可选择身份，无需 Compose `user:`。
+
+仓库 `compose.yaml` 默认仅发布到宿主 `127.0.0.1:8080`，用 `./state` 持久化，不再使用 Compose secret。其环境变量只有以下五项；`PASSWORD` 没有默认密码，文件模式允许它为空，环境变量模式则会在启动时检查至少 6 字节：
+
+```yaml
+environment:
+  PUID: '${PUID-1000}'
+  PGID: '${PGID-1000}'
+  UMASK: '${UMASK-0022}'
+  PASSWORD: '${PASSWORD-}'
+  ConfigPath: '${ConfigPath-}'
+```
+
+在仓库根目录的 Bash 中为**全新部署**准备：
 
 ```sh
-nix build path:.#default
-./result/bin/nixos-file-station -config "$HOME/.config/nixos-file-station/config.json"
+# 使用当前普通用户；也可改为指定的非 root UID/GID。
+export PUID="$(id -u)" PGID="$(id -g)" UMASK='0022' ConfigPath=''
+read -rs -p 'Administrator password (at least 6 bytes; 12+ recommended): ' PASSWORD
+printf '\n'
+export PASSWORD
+mkdir -p state
+docker compose up -d --build
+unset PASSWORD
 ```
 
-flake 支持 `x86_64-linux` 和 `aarch64-linux`。包内包含前端静态资源，运行时无需 Node.js，也无需另外指定 `-static`。
+若希望直接填写密码，可创建不提交仓库的私有 `.env`（权限 `0600`），然后运行 `docker compose up -d --build`：
 
-## NixOS 服务
+```dotenv
+PUID=1000
+PGID=1000
+UMASK='0022'
+PASSWORD='请替换为你自己的至少12字节密码'
+ConfigPath=''
+```
 
-在系统 flake 中加入本项目的 input，并导入 `nixosModules.default`。系统需已配置非 root 用户 `nixos`；模块复用该账户，不创建或修改其登录配置。以下示例使用已有的 `configuration.nix`；将主机名和系统架构替换为实际值，已有 flake 可合并对应的 input 和 module。
+`PASSWORD` 没有默认值，上例必须替换。**Compose YAML 中直接填写的密码包含 `$` 时需写成 `$$`；在 `.env` 中则用单引号包住密码，避免变量插值。** 不要只依赖 YAML 单引号阻止 Compose 插值，也不要使用文档示例密码作为实际密码。
+
+入口只准备状态目录本身。**已有数据更换 UID/GID 时，管理员必须先停服务、备份，再安全迁移私有状态目录及其已有内容的属主，保留权限和内容**，不能依赖入口递归修复。状态仍必须持久化，删除或替换状态库会丢失共享设置、任务、会话和回收站关联。rootless Docker / user namespace remapping 需按其宿主 UID 映射准备权限。
+
+Compose 默认不设置 `user:`；保留 `cap_drop: [ALL]`，仅为入口准备目录和降权添加 `CHOWN`、`SETUID`、`SETGID`，并保留 `no-new-privileges:true`。若显式使用非 root `--user UID:GID`，未设置的 `PUID` / `PGID` 沿用当前身份，不套用 root 入口的默认值；入口不会提权或更改目录属主，状态目录须提前归属当前身份，Go 服务仍会设置其权限为 `0700`。显式设置的 `PUID` / `PGID` 与当前身份不符会报错。
+
+Compose 中默认**没有数据共享挂载**。例如取消以下注释并按需修改：
+
+```yaml
+volumes:
+  - ./state:/var/lib/file-station
+  - /srv/documents:/mnt/documents
+  # - /srv/archive:/mnt/archive:ro
+```
+
+重建容器后在 UI 手动添加 **`/mnt/documents`**，不是宿主 `/srv/documents`。挂载不等于自动共享，容器也不能浏览没有挂载进来的宿主路径。宿主目录的 UID/GID、ACL 和只读挂载仍生效。`su-exec` 切换身份会清空附加组，不要依赖 Docker `group_add` / `--group-add` 保留权限；请按进程实际身份设置主组权限或 ACL。不要为图方便改成 root，也不要递归修改现有共享数据的属主。
+
+也可不用 Compose（先准备 `state`，以下命令从终端读取密码，不读取 Compose 的 `.env`）：
+
+```sh
+mkdir -p state
+read -rs -p 'Administrator password (at least 6 bytes; 12+ recommended): ' PASSWORD
+printf '\n'
+export PASSWORD
+docker build -t file-station:local .
+docker run -d --name file-station \
+  --cap-drop ALL \
+  --cap-add CHOWN --cap-add SETUID --cap-add SETGID \
+  --security-opt no-new-privileges:true \
+  -p 127.0.0.1:8080:8080 \
+  -e PUID="${PUID-1000}" -e PGID="${PGID-1000}" \
+  -e UMASK='0022' -e PASSWORD -e ConfigPath='' \
+  --mount "type=bind,src=$PWD/state,dst=/var/lib/file-station" \
+  file-station:local
+unset PASSWORD
+```
+
+镜像命令为 `-static /usr/share/file-station`。环境变量模式固定监听容器内 `0.0.0.0:8080`、使用 `/var/lib/file-station`，首次零共享；宿主映射仍仅为 `127.0.0.1:8080`。公开监听时应显式调整端口映射及防火墙。Compose 只透传上面列出的五项，并不会自动透传宿主 shell 或 `.env` 的其他变量。
+
+### Docker 的可选 JSON 文件模式
+
+需要自定义监听、状态路径、安全 Cookie 或使用密码文件时，可只读挂载 JSON 并设置 `ConfigPath`。例如创建私有 `config.json`（`0600`，不在共享内），直接在其中填写实际密码：
+
+```json
+{
+  "ip": "0.0.0.0",
+  "port": 8080,
+  "stateDir": "/var/lib/file-station",
+  "password": "replace-with-your-own-long-password",
+  "umask": "0022",
+  "secureCookies": false,
+  "shares": []
+}
+```
+
+确保运行 UID 可以读取该文件，然后在 Compose 中启用可选配置挂载并设置路径：
+
+```yaml
+environment:
+  PUID: '${PUID-1000}'
+  PGID: '${PGID-1000}'
+  UMASK: '${UMASK-0022}'
+  PASSWORD: '${PASSWORD-}'
+  ConfigPath: /etc/file-station/config.json
+volumes:
+  - ./state:/var/lib/file-station
+  - ./config.json:/etc/file-station/config.json:ro
+```
+
+直接 `docker run` 时，在前面的完整命令中将 `-e ConfigPath=''` 换为 `-e ConfigPath=/etc/file-station/config.json`，并追加 `--mount "type=bind,src=$PWD/config.json,dst=/etc/file-station/config.json,readonly"`（放在镜像名之前）。也可在 JSON 中使用 `passwordFile` 代替 `password`，再只读挂载对应密码文件；文件需对运行 UID 可读，且位于共享之外。
+
+选择文件模式后，**`PASSWORD` 与 `UMASK` 无论是否为空或有效都完全忽略**，不能作为 JSON 的回退；`PUID` / `PGID` 仍用于容器身份。JSON 必须使用容器内路径；容器文件模式须明确设置 `ip: "0.0.0.0"`，否则 JSON 默认 `127.0.0.1` 会导致端口映射无法访问服务。状态仍应挂载到持久目录。HTTPS 部署在 JSON 中设置 `secureCookies: true`；静态目录仍由镜像 `-static` 参数独立指定。
+
+## Nix 包与 NixOS 服务
+
+```sh
+nix build path:.#file-station
+./result/bin/file-station -config "$HOME/.config/file-station/config.json"
+```
+
+`default` 与 `file-station` 包相同，flake 支持 `x86_64-linux` 和 `aarch64-linux`。包内包装器自动指定前端，无需 `-static`。源码 input 和主页继续使用实际仓库地址 `github:CYL96/NixOS-File-Station`。
+
+NixOS 模块生成 JSON 并通过 `-config` 启动，因此始终使用文件模式；监听、状态、密码、隐私元数据和首次导入共享由模块配置产生，不受 `PASSWORD` / `UMASK` 覆盖。模块固定生成 `umask: "0077"` 并保留 systemd `UMask=0077`，不提供额外 umask 选项。
+
+在系统 flake 添加 input 并导入模块，已有 flake 合并对应部分即可：
 
 ```nix
 {
@@ -114,35 +241,25 @@ flake 支持 `x86_64-linux` 和 `aarch64-linux`。包内包含前端静态资源
   };
 
   outputs = inputs@{ nixpkgs, ... }: {
-    nixosConfigurations.file-station = nixpkgs.lib.nixosSystem {
+    nixosConfigurations.myhost = nixpkgs.lib.nixosSystem {
       system = "x86_64-linux";
       modules = [
         ./configuration.nix
         inputs.file-station.nixosModules.default
         {
           users.groups.documents = {};
-          # 为新部署预先创建目录；不会递归修改已有数据的权限。
-          systemd.tmpfiles.rules = [
-            "d /srv/documents 2770 root documents - -"
-            "d /srv/archive 2770 root documents - -"
-          ];
-
-          services.nixos-file-station = {
+          # 仅预建新的专用数据目录，不递归改动已有文件。
+          systemd.tmpfiles.rules = [ "d /srv/documents 2770 root documents - -" ];
+          services.file-station = {
             enable = true;
             ip = "127.0.0.1";
             port = 8080;
-            passwordFile = "/run/secrets/nixos-file-station-password";
-            stateDir = "/var/lib/nixos-file-station";
+            passwordFile = "/run/secrets/file-station-password";
+            stateDir = "/var/lib/file-station";
+            user = "file-station";
+            group = "file-station";
             supplementaryGroups = [ "documents" ];
-            allowedRoots = [
-              { path = "/srv/documents"; }
-              { path = "/srv/archive"; readOnly = true; }
-            ];
-            # 仅首次初始化时导入；之后在页面管理。
-            shares = {
-              documents = { name = "文档"; path = "/srv/documents"; };
-              archive = { name = "归档"; path = "/srv/archive"; readOnly = true; };
-            };
+            # shares 默认 {}，首次登录后手动添加 /srv/documents。
           };
         }
       ];
@@ -151,38 +268,62 @@ flake 支持 `x86_64-linux` 和 `aarch64-linux`。包内包含前端静态资源
 }
 ```
 
-部署前通过秘密管理工具或管理员操作提供 `/run/secrets/nixos-file-station-password`，密码要求与本地运行相同。该文件可以保持 root:root、`0600`；模块通过 systemd `LoadCredential` 传递给运行用户 `nixos`，服务主组仍为专用组 `nixos-file-station`，`supplementaryGroups` 仅为服务进程追加组权限。服务与该账户的其他进程共享 UID，不再具有独立用户的隔离边界。**必须使用运行时路径字符串，不要用 Nix 路径字面量或 `writeText` 把密码放进 Nix store。** 修改密码后重启服务。
+默认自动创建专用系统用户和组 `file-station`，不再依赖名为 `nixos` 的登录用户。`user` 可改为已有非 root 用户，该用户须在 `users.users` 声明；模块不会修改自定义账户的主组或登录配置。`group` 可自定义，模块会创建该组，已有组定义可正常合并。`SupplementaryGroups` 仅为服务进程追加权限，不更改账户的全局组成员关系。例如：
 
-允许根目录和首次导入的共享目录必须在服务启动前存在。示例的 tmpfiles 规则适用于新建专用目录；已有共享数据应由管理员按需配置组权限或 ACL，不要直接递归 `chown`。只读目录也需要服务用户具备读取和目录遍历权限。模块以 `0700` 创建状态目录，并将状态目录及其内容的属主、属组设为 `nixos:nixos-file-station`，使原有状态可继续使用；不改变已有状态文件的权限位。保留该目录才能保留共享设置、任务和回收站元数据。也可设置 `shares = {};`，首次登录后再添加共享。
+```nix
+services.file-station = {
+  user = "alice";       # users.users.alice 已在系统配置中声明
+  group = "file-data";  # 模块创建此组，也可与已有定义合并
+  supplementaryGroups = [ "documents" ];
+};
+```
 
-`allowedRoots` 同时约束应用允许范围及 systemd 文件系统访问权限。共享级 `readOnly` 由应用强制执行；需要操作系统层面的只读保护时，应在相应允许根目录设置 `readOnly = true`，该根目录内所有共享都必须只读。
+复用已有用户会与其其他进程共享 UID，失去专用用户的隔离边界。授权已有数据时优先按需设置组权限或 ACL，所有父目录也需可遍历。模块不创建默认共享或 home，不递归更改共享目录；状态目录以 `0700` 创建，私有状态内容属主/组调整为所选用户/组，保留已有状态文件权限。
+
+部署前用秘密管理工具或管理员操作提供 `passwordFile`；可以保持 root:root、`0600`，父目录也可仅 root 访问。systemd `LoadCredential` 将其传入服务私有凭据路径；生成的 JSON 中 `passwordFile` 指向该凭据，`passwordSourceFile` 记录原始路径，防止 UI 共享覆盖密码源的目录。原始路径只是防共享元数据，应用不读取它，也不将其用于认证；密码内容不会写入生成的 JSON 或 Nix store。**必须使用运行时绝对路径字符串，不能用 Nix 路径字面量、`writeText` 或其他产出 store 文件的方式保存密码。**
+
+模块移除了依赖目录白名单的 `ReadWritePaths`/`ReadOnlyPaths`，以及 `ProtectSystem`、`ProtectHome`、`PrivateTmp`、`PrivateDevices` 文件系统重映射；不再另设一套共享路径权限。`RemoveIPC=false` 避免服务停止时清理同一用户或组的其他进程所用 IPC 对象，即使使用默认用户但自定义共享组也保持此设置。保留禁止提权、空 capability 集、内核/控制组保护等加固，敏感内核接口仍受保护。普通数据路径由服务用户实际权限决定。UI 添加的共享不会自动生成挂载依赖；网络磁盘等应在系统中配置挂载和服务启动顺序，例如通过 `systemd.services.file-station.unitConfig.RequiresMountsFor = [ "/mnt/documents" ];`。
+
+可选 Nix 首次导入写法为 `shares.documents = { name = "文档"; path = "/srv/documents"; readOnly = false; };`；属性名是稳定共享 ID，仍遵守仅首次初始化导入规则。
 
 ```sh
-sudo nixos-rebuild switch --flake /path/to/system-flake#file-station
-systemctl status nixos-file-station
-journalctl -u nixos-file-station
-sudo systemctl restart nixos-file-station
+sudo nixos-rebuild switch --flake /path/to/system-flake#myhost
+systemctl status file-station
+journalctl -u file-station
+sudo systemctl restart file-station
 ```
+
+## 从旧名称迁移（破坏性变更）
+
+旧 `nixos-file-station` 二进制、flake 包属性、`services.nixos-file-station` 选项和 `nixos-file-station.service` 已删除，统一改为 `file-station` / `services.file-station` / `file-station.service`，没有兼容别名。`allowedRoots` 已删除，应从 JSON/Nix 配置中移除，改用服务账户权限、ACL 和挂载选项授权。
+
+旧 `FILE_STATION_*` 环境变量已全部删除，不提供兼容别名。Docker 改用 `PUID`、`PGID`、`UMASK`、`PASSWORD`、`ConfigPath`；默认直接填写密码，旧 Compose secret 挂载应移除或迁移为明确选择的 JSON 文件模式。静态目录仅使用 `-static`，自定义监听、状态路径和安全 Cookie 等设置迁入 JSON。
+
+**普通新建内容的默认权限有所放宽**：本地/JSON 默认 `umask: "0022"` 产生 `0644` 文件、`0755` 目录，不再是此前的 `0640` / `0750`。如需保持此前本地权限，在 JSON 中明确设置 `"umask": "0027"`；Docker 环境变量模式可设置 `UMASK='0027'`。已有内容权限不自动改动，NixOS 仍固定使用 `"0077"`。
+
+默认状态路径从 `/var/lib/nixos-file-station` 改成 `/var/lib/file-station`。**迁移时停旧服务并备份，显式设置 `services.file-station.stateDir = "/var/lib/nixos-file-station";`（本地/Docker 在 JSON 中设置 `stateDir`，Docker 同时匹配持久挂载），保留原 SQLite 和所有状态文件。** 也可在停服务后完整迁移状态到新路径并正确设置运行 UID/GID 的属主，不能通过删除状态库重置。Nix 模块会把所选状态路径归属调整到新服务用户/组；Docker 入口只调整状态目录本身，已有内容由管理员安全迁移。不要同时运行新旧服务访问同一状态库。旧 bootstrap `shares` 不会覆盖数据库，已有共享继续保留，权限变化时可在 UI 修正。
+
+会话 Cookie 从 `nixos_file_station_session` 改为 `file_station_session`，旧浏览器会话不兼容，需要重新登录。旧 unit 的自定义覆盖、监控和日志命令也应迁移；仓库远程 URL 没有变更。
 
 ## HTTPS、反向代理与防火墙
 
-局域网部署推荐通过 HTTPS 反向代理访问，并设置 `secureCookies = true`；NixOS 对应 `services.nixos-file-station.secureCookies = true`。只监听回环地址时，应让代理连接该本地地址。
+局域网部署推荐 HTTPS 代理，并在 JSON 设置 `secureCookies: true`，NixOS 对应 `services.file-station.secureCookies = true`；Docker 需要切换到 JSON 文件模式设置，环境变量模式不提供该选项。普通 HTTP 不应启用 Secure，否则浏览器不会发送会话 Cookie。
 
-- 代理应保留原始 Host，前端与接口保持同源，不要拆分到不同源部署。
-- 后台事件使用 SSE：关闭 `/api/events` 的代理缓冲，并设置足够长的连接超时。
-- 按需配置代理的上传大小限制。
-- NixOS 模块不会自动开放防火墙。使用反向代理时开放代理的 HTTPS 端口；若直接监听局域网地址，则按需开放服务的 TCP 端口，并限制可信访问范围。
+- 代理保留原始 Host，前端和接口同源，不要拆分不同域名/端口。
+- 后台事件使用 SSE，关闭 `/api/events` 代理缓冲并配置足够长的连接超时。
+- 按需设置上传大小限制。
+- NixOS 模块不会自动开放防火墙。使用代理时开放 HTTPS 端口；直接监听局域网时按需开放服务 TCP 端口并限制可信访问范围。
 
 ## 文件操作限制与备份安全
 
-- 路径限制不能替代操作系统隔离。仅配置可信目录，结合服务账户权限及 systemd 沙箱使用；挂载点和已有硬链接仍可能暴露其他数据。不能删除共享根目录，也不能操作范围外或不可用的共享；内部 `.webui-*` 路径不允许通过普通文件操作访问。
-- 符号链接可以显示，但不能进入、下载、预览或复制；移动、重命名和回收站操作处理链接本身。仅操作普通文件和目录，不处理特殊文件。
-- 复制不保留 Unix 所有者、ACL、扩展属性、硬链接关系或原始时间。新文件模式为 `0640`、目录为 `0750`，仍受部署的 UMask/ACL 影响。同名目录不能递归覆盖。
-- 上传和复制使用目标目录内的隐藏临时文件，不静默覆盖。取消操作不会回滚已经完成的条目；异常中断后可能残留临时文件，确认无任务运行后再由管理员清理。
-- 文本编辑限已有的、不含 NUL 且不超过 1 MiB 的 UTF-8 普通文件。只读共享、回收站、符号链接、无宿主写权限或多硬链接的文件不能保存。保存需保留权限、所有者、组、ACL 和扩展属性，无法完整保留时拒绝保存；原子替换会改变 inode 和原始时间。
-- 文本保存会检查读取版本；检测到外部修改时保留草稿并报告冲突，不提供强制覆盖。但版本检查与替换之间仍可能被外部进程写入，**不是文件系统级 CAS，不能保证绝对避免并发覆盖**。统一 CRLF 文本保存时保留 CRLF，其他换行在编辑后统一为 LF。
-- 同文件系统移动使用原子重命名；跨文件系统移动先复制后删除源，**不是整体事务**。失败后可能同时存在源和目标，需检查后再决定如何重试。
-- 后台任务的完成和失败状态会持久化；重启时未完成任务标记为中断，不自动重放。
-- 回收站位于各共享根目录的 `.webui-trash`，占用同一文件系统空间，元数据保存在 `stateDir`。**回收站不是备份**；备份与恢复应同时包含共享文件、隐藏回收站和状态数据库，并在停止服务及其他写入后保持数据一致。
-- 文本不作为网页执行；Markdown 预览不执行原始 HTML，外部图片不自动加载。会话 Cookie 使用 HttpOnly 和 SameSite=Strict，HTTPS 部署应启用 Secure。
-- **NixOS generation 回滚不会回滚文件删除、覆盖或状态数据库变更。**
+- 应用权限检查不能替代操作系统隔离。只授予服务账户必要权限；挂载点和已有硬链接可能暴露其他数据。不能删除共享根目录或操作共享之外、不可用共享中的文件；`.webui-*` 内部路径不允许通过普通文件接口访问。
+- 共享内部的符号链接可显示，但不能进入、下载、预览或复制；移动、重命名、回收站处理链接本身。只操作普通文件和目录，不处理特殊文件。
+- 复制不保留 Unix 所有者、ACL、扩展属性、硬链接关系或原始时间。同名目录不能递归覆盖。普通新文件权限为 `0666 & ~umask`、新目录为 `0777 & ~umask`，仍受 ACL 等操作系统权限规则影响；默认 `"0022"` 对应 `0644` / `0755`，`"0077"` 对应 `0600` / `0700`。该设置只作用于普通新建、上传和复制产生的文件/目录；内部状态与暂存保持私有，文本保存、同文件系统移动以及回收站恢复不更改原内容权限。NixOS 固定应用 `umask: "0077"` 并保留 `UMask=0077`。
+- 上传和复制使用目标目录隐藏临时文件，不静默覆盖。取消不回滚已完成条目；异常中断后可能残留临时文件，确认无任务后再由管理员清理。
+- 文本编辑限已有、不含 NUL、不超过 1 MiB 的 UTF-8 普通文件。只读共享、回收站、符号链接、无写权限或多硬链接文件不能保存。保存需保留权限、属主/组、ACL 和扩展属性，无法完整保留则拒绝；原子替换改变 inode 和原始时间。
+- 文本保存检查读取版本，外部修改时保留草稿并报告冲突，不提供强制覆盖。但检查与替换之间仍可能有外部写入，**不是文件系统级 CAS**。统一 CRLF 的文件保留 CRLF，其他换行编辑后统一为 LF。
+- 同文件系统移动为原子重命名；跨文件系统先复制后删除，**不是整体事务**，失败后源和目标可能同时存在。
+- 后台任务完成/失败状态持久化；重启时未完成任务标为中断，不自动重放。
+- 回收站在共享根下 `.webui-trash`，占用同一文件系统空间，元数据在 `stateDir`。**回收站不是备份**；停止服务及其他写入后，一致地备份共享文件、隐藏回收站和状态数据库。
+- 文本不作为网页执行；Markdown 预览不执行原始 HTML，外部图片不自动加载。会话 Cookie 使用 HttpOnly、SameSite=Strict，HTTPS 应启用 Secure。
+- **NixOS generation 回滚不会回滚文件删除、覆盖或数据库变更。**

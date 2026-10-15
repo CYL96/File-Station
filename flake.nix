@@ -1,5 +1,5 @@
 {
-  description = "NixOS File Station with a browser-based shared-file manager";
+  description = "File Station with a browser-based shared-file manager";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
@@ -16,7 +16,7 @@
         in
         {
           default = package;
-          nixos-file-station = package;
+          file-station = package;
           frontend = package.frontend;
         });
 

@@ -223,13 +223,13 @@ func (s *Server) startOperation(b operationBody) (string, error) {
 					if b.Kind == "move" {
 						workErr = renameBetween(src.root, p, dst.root, target, b.Conflict == "replace")
 						if errors.Is(workErr, unix.EXDEV) {
-							workErr = publishCopy(ctx, src.root, p, dst.root, target, b.Conflict)
+							workErr = s.publishCopy(ctx, src.root, p, dst.root, target, b.Conflict)
 							if workErr == nil {
 								workErr = src.root.RemoveAll(p)
 							}
 						}
 					} else {
-						workErr = publishCopy(ctx, src.root, p, dst.root, target, b.Conflict)
+						workErr = s.publishCopy(ctx, src.root, p, dst.root, target, b.Conflict)
 					}
 				}
 			}
@@ -492,7 +492,7 @@ func (s *Server) trashRequest(w http.ResponseWriter, r *http.Request) (*Share, t
 	}
 	return sh, b, original, nil
 }
-func (s *Server) restoreTrash(w http.ResponseWriter, r *http.Request) error {
+func (s *Server) restoreTrash(w http.ResponseWriter, r *http.Request) (result error) {
 	s.mutation.Lock()
 	defer s.mutation.Unlock()
 	sh, b, original, err := s.trashRequest(w, r)
@@ -500,7 +500,19 @@ func (s *Server) restoreTrash(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	parent := path.Dir(original)
-	if err = sh.root.MkdirAll(parent, 0750); err != nil {
+	created, err := s.mkdirParents(sh.root, parent)
+	skipped := false
+	defer func() {
+		for i := len(created) - 1; i >= 0; i-- {
+			if chmodErr := sh.root.Chmod(created[i], s.dirMode()); result == nil && chmodErr != nil {
+				result = chmodErr
+			}
+		}
+		if result == nil {
+			jsonResponse(w, map[string]bool{"ok": true, "skipped": skipped})
+		}
+	}()
+	if err != nil {
 		return err
 	}
 	if err = noLinks(sh.root, parent); err != nil {
@@ -511,7 +523,7 @@ func (s *Server) restoreTrash(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	if skip {
-		jsonResponse(w, map[string]bool{"ok": true, "skipped": true})
+		skipped = true
 		return nil
 	}
 	if err = renameBetween(sh.root, path.Join(".webui-trash", b.ID, "data"), sh.root, target, b.Conflict == "replace"); err != nil {
@@ -522,7 +534,6 @@ func (s *Server) restoreTrash(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	jsonResponse(w, map[string]bool{"ok": true})
 	return nil
 }
 func (s *Server) deleteTrash(w http.ResponseWriter, r *http.Request) error {

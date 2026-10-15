@@ -8,104 +8,104 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"golang.org/x/sys/unix"
 )
 
-// AllowedRoot is a deployment-controlled boundary, never writable through settings.
-type AllowedRoot struct {
-	Path     string `json:"path"`
-	ReadOnly bool   `json:"readOnly"`
-	root     *os.Root
-}
-
 func within(base, p string) bool {
-	return p == base || strings.HasPrefix(p, base+string(filepath.Separator))
+	return p == base || strings.HasPrefix(p, strings.TrimRight(base, string(filepath.Separator))+string(filepath.Separator))
 }
 func overlaps(a, b string) bool { return within(a, b) || within(b, a) }
-func systemPath(p string) bool {
-	for _, base := range []string{"/etc", "/nix", "/proc", "/sys", "/dev"} {
-		if within(base, p) {
-			return true
+
+// Host paths may resolve symlinks; paths inside an opened share still use noLinks.
+func accessibleDirectory(p string) (string, error) {
+	if !filepath.IsAbs(p) {
+		return "", fail(400, "目录路径必须是绝对路径")
+	}
+	p = filepath.Clean(p)
+	for _, component := range strings.Split(p, string(filepath.Separator)) {
+		if strings.HasPrefix(component, ".webui-") {
+			return "", fail(403, "路径不允许访问")
 		}
 	}
-	return p == "/"
+	real, err := filepath.EvalSymlinks(p)
+	if err != nil {
+		return "", err
+	}
+	for _, component := range strings.Split(real, string(filepath.Separator)) {
+		if strings.HasPrefix(component, ".webui-") {
+			return "", fail(403, "路径不允许访问")
+		}
+	}
+	info, err := os.Stat(real)
+	if err != nil {
+		return "", err
+	}
+	if !info.IsDir() {
+		return "", fail(400, "路径不是目录")
+	}
+	// AT_EACCESS asks the kernel to check effective IDs, supplementary groups and
+	// ACLs. Opening an os.Root alone does not require read or search permission.
+	if err = unix.Faccessat(unix.AT_FDCWD, real, unix.R_OK|unix.X_OK, unix.AT_EACCESS); err != nil {
+		return "", &os.PathError{Op: "access", Path: real, Err: err}
+	}
+	return real, nil
 }
-func (s *Server) openAllowedRoots() error {
-	secret := ""
-	if s.config.PasswordFile != "" {
-		var err error
-		secret, err = filepath.EvalSymlinks(s.config.PasswordFile)
-		if err != nil {
-			return err
-		}
-	}
-	for _, boundary := range s.config.AllowedRoots {
-		if !filepath.IsAbs(boundary.Path) || filepath.Clean(boundary.Path) != boundary.Path {
-			return fmt.Errorf("allowed root must be a normalized absolute path")
-		}
-		real, err := filepath.EvalSymlinks(boundary.Path)
-		if err != nil {
-			return err
-		}
-		real = filepath.Clean(real)
-		if systemPath(real) {
-			return fmt.Errorf("system path cannot be shared: %s", real)
-		}
-		if overlaps(real, s.config.StateDir) {
-			return fmt.Errorf("stateDir must be outside shares and allowed roots")
-		}
-		if real != boundary.Path {
-			return fmt.Errorf("allowed root must not traverse symlinks")
-		}
-		if secret != "" && within(real, secret) {
-			return fmt.Errorf("passwordFile must be outside allowed roots")
-		}
-		for _, previous := range s.allowedRoots {
-			if overlaps(real, previous.Path) {
-				return fmt.Errorf("allowed roots must not overlap")
+
+// Resolve every accessible prefix without requiring access to the original secret.
+// LoadCredential may read a source beneath root-only directories before startup.
+func resolvedPrivatePath(p string) string {
+	for range 40 {
+		for prefix := p; ; prefix = filepath.Dir(prefix) {
+			if real, err := filepath.EvalSymlinks(prefix); err == nil {
+				suffix, _ := filepath.Rel(prefix, p)
+				return filepath.Join(real, suffix)
+			}
+			if target, err := os.Readlink(prefix); err == nil {
+				if !filepath.IsAbs(target) {
+					target = filepath.Join(filepath.Dir(prefix), target)
+				}
+				suffix, _ := filepath.Rel(prefix, p)
+				p = filepath.Join(target, suffix)
+				break
+			}
+			if prefix == filepath.Dir(prefix) {
+				return p
 			}
 		}
-		boundary.Path = real
-		boundary.root, err = os.OpenRoot(real)
-		if err != nil {
-			return err
-		}
-		s.allowedRoots = append(s.allowedRoots, boundary)
+	}
+	return p
+}
+
+func (s *Server) sharePrivacy(p string) error {
+	if overlaps(p, s.config.StateDir) {
+		return fail(403, "stateDir must be outside shares")
+	}
+	if s.config.PasswordFile != "" && within(p, s.config.PasswordFile) {
+		return fail(403, "passwordFile must be outside shares")
+	}
+	if s.config.PasswordSourceFile != "" && (within(p, s.config.PasswordSourceFile) || within(p, s.passwordSourceReal)) {
+		return fail(403, "passwordSourceFile must be outside shares")
 	}
 	return nil
 }
+
 func (s *Server) openShare(sh Share) (Share, error) {
 	sh.root = nil
 	sh.err = ""
-	if !validName(sh.ID) || strings.TrimSpace(sh.Name) == "" || len(sh.Name) > 255 || !filepath.IsAbs(sh.Path) {
+	if !validName(sh.ID) || strings.TrimSpace(sh.Name) == "" || len(sh.Name) > 255 {
 		return sh, fail(400, "共享名称或路径无效")
 	}
-	sh.Path = filepath.Clean(sh.Path)
-	for _, boundary := range s.allowedRoots {
-		if !within(boundary.Path, sh.Path) {
-			continue
-		}
-		if boundary.ReadOnly && !sh.ReadOnly {
-			return sh, fail(403, "部署范围只读，不能创建可写共享")
-		}
-		relative, err := filepath.Rel(boundary.Path, sh.Path)
-		if err != nil {
-			return sh, err
-		}
-		if relative != "." {
-			if _, err = safePath(filepath.ToSlash(relative)); err != nil {
-				return sh, err
-			}
-		}
-		if err = noLinks(boundary.root, filepath.ToSlash(relative)); err != nil {
-			return sh, err
-		}
-		sh.root, err = boundary.root.OpenRoot(relative)
-		if err != nil {
-			return sh, err
-		}
-		return sh, nil
+	real, err := accessibleDirectory(sh.Path)
+	if err != nil {
+		return sh, err
 	}
-	return sh, fail(403, "目录不在部署允许范围内")
+	sh.Path = real
+	if err = s.sharePrivacy(real); err != nil {
+		return sh, err
+	}
+	sh.root, err = os.OpenRoot(real)
+	return sh, err
 }
 func (s *Server) loadShares() error {
 	_, err := s.db.Exec(`CREATE TABLE IF NOT EXISTS shared_settings(id TEXT PRIMARY KEY,name TEXT NOT NULL,path TEXT NOT NULL,read_only INTEGER NOT NULL);
@@ -197,40 +197,47 @@ func (s *Server) sharedSettings(w http.ResponseWriter, r *http.Request) error {
 	for _, sh := range s.shares {
 		result = append(result, map[string]any{"id": sh.ID, "name": sh.Name, "path": sh.Path, "readOnly": sh.ReadOnly, "available": sh.root != nil, "error": sh.err})
 	}
-	jsonResponse(w, map[string]any{"shares": result, "allowedRoots": s.allowedRoots})
+	jsonResponse(w, map[string]any{"shares": result})
 	return nil
 }
 func (s *Server) settingsDirectories(w http.ResponseWriter, r *http.Request) error {
-	for _, boundary := range s.allowedRoots {
-		if boundary.Path != r.URL.Query().Get("root") {
+	p := r.URL.Query().Get("path")
+	if p == "" {
+		p = string(filepath.Separator)
+	}
+	real, err := accessibleDirectory(p)
+	if err != nil {
+		return err
+	}
+	if within(s.config.StateDir, real) {
+		return fail(403, "不允许浏览应用私有目录")
+	}
+	dir, err := os.Open(real)
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	entries, err := dir.ReadDir(-1)
+	if err != nil {
+		return err
+	}
+	result := []map[string]string{}
+	for _, entry := range entries {
+		if !entry.IsDir() || entry.Type()&os.ModeSymlink != 0 || strings.HasPrefix(entry.Name(), ".webui-") {
 			continue
 		}
-		p, err := safePath(r.URL.Query().Get("path"))
-		if err != nil {
-			return err
+		child := filepath.Join(real, entry.Name())
+		if within(s.config.StateDir, child) {
+			continue
 		}
-		if err = noLinks(boundary.root, p); err != nil {
-			return err
+		canonical, err := accessibleDirectory(child)
+		if err != nil || within(s.config.StateDir, canonical) {
+			continue
 		}
-		dir, err := boundary.root.Open(p)
-		if err != nil {
-			return err
-		}
-		defer dir.Close()
-		entries, err := dir.ReadDir(-1)
-		if err != nil {
-			return err
-		}
-		result := []map[string]string{}
-		for _, entry := range entries {
-			if entry.IsDir() && entry.Type()&os.ModeSymlink == 0 && !strings.HasPrefix(entry.Name(), ".webui-") {
-				result = append(result, map[string]string{"name": entry.Name(), "path": filepath.Join(boundary.Path, p, entry.Name())})
-			}
-		}
-		jsonResponse(w, map[string]any{"path": filepath.Join(boundary.Path, p), "entries": result})
-		return nil
+		result = append(result, map[string]string{"name": entry.Name(), "path": canonical})
 	}
-	return fail(403, "不允许浏览此目录范围")
+	jsonResponse(w, map[string]any{"path": real, "entries": result})
+	return nil
 }
 func (s *Server) shareBusy(id string) bool {
 	s.tasksMu.Lock()

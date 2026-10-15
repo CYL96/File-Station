@@ -1,6 +1,6 @@
 { config, lib, pkgs, utils, ... }:
 let
-  cfg = config.services.nixos-file-station;
+  cfg = config.services.file-station;
   inherit (lib) mkEnableOption mkIf mkOption types;
   absolutePath = types.strMatching "/.*";
   shares = lib.mapAttrsToList (id: share: {
@@ -8,15 +8,16 @@ let
     inherit (share) name path readOnly;
   }) cfg.shares;
   sharePaths = map (share: share.path) shares;
-  rootPaths = map (root: root.path) cfg.allowedRoots;
-  writableRoots = lib.filter (root: !root.readOnly) cfg.allowedRoots;
-  readOnlyRoots = lib.filter (root: root.readOnly) cfg.allowedRoots;
   quotePath = path: lib.replaceStrings [ "%" ] [ "%%" ] (builtins.toJSON path);
-  runtimeConfig = pkgs.writeText "nixos-file-station-config.json" (builtins.toJSON {
-    inherit (cfg) ip port stateDir secureCookies allowedRoots;
+  credentialPath = "/run/credentials/file-station.service/password";
+  runtimeConfig = pkgs.writeText "file-station-config.json" (builtins.toJSON {
+    inherit (cfg) ip port stateDir secureCookies;
     inherit shares;
+    umask = "0077";
     # systemd loads the root-readable secret into a service-private credential.
-    passwordFile = "/run/credentials/nixos-file-station.service/password";
+    passwordFile = credentialPath;
+    # Protect the original path from sharing without reading it as the service user.
+    passwordSourceFile = cfg.passwordFile;
   });
   contains = root: path: root == path || lib.hasPrefix (root + "/") path;
   overlaps = first: second: contains first second || contains second first;
@@ -26,14 +27,14 @@ let
       (lib.drop 1 (lib.splitString "/" path));
 in
 {
-  options.services.nixos-file-station = {
-    enable = mkEnableOption "the single-administrator NixOS File Station";
+  options.services.file-station = {
+    enable = mkEnableOption "the single-administrator File Station";
 
     package = mkOption {
       type = types.package;
       default = pkgs.callPackage ./package.nix { };
       defaultText = lib.literalExpression "pkgs.callPackage ./package.nix { }";
-      description = "Package providing the nixos-file-station executable and frontend assets.";
+      description = "Package providing the file-station executable and frontend assets.";
     };
 
     ip = mkOption {
@@ -55,23 +56,24 @@ in
 
     stateDir = mkOption {
       type = absolutePath;
-      default = "/var/lib/nixos-file-station";
+      default = "/var/lib/file-station";
       description = ''
         Private persistent state directory, created with mode 0700 and owned
-        by nixos with group nixos-file-station. Keep it outside every allowed root. The SQLite share
-        configuration here survives deployment changes and service restarts.
+        by the configured user and group. Keep it outside every share. The
+        SQLite share configuration here survives deployments and restarts.
+        Set this explicitly to the old state directory when migrating.
       '';
     };
 
     passwordFile = mkOption {
       type = absolutePath;
-      example = "/run/secrets/nixos-file-station-password";
+      example = "/run/secrets/file-station-password";
       description = ''
         Absolute runtime path to a plaintext administrator password containing
-        at least 6 bytes (12 or more recommended). Supply a string, not a Nix path literal, and do not
-        use writeText or another store-producing function. The secret is read
-        by systemd through LoadCredential, so it may remain root-owned 0600.
-        Password rotation takes effect after restarting nixos-file-station.service.
+        at least 6 bytes (12 or more recommended). Supply a string, not a Nix
+        path literal, and do not use writeText or another store-producing
+        function. systemd reads it through LoadCredential, so it may remain
+        root-owned 0600. Restart file-station.service after password rotation.
       '';
     };
 
@@ -81,67 +83,63 @@ in
       description = "Set the Secure cookie flag. Enable when accessing the service through HTTPS.";
     };
 
+    user = mkOption {
+      type = types.str;
+      default = "file-station";
+      description = ''
+        Non-root service user. The default dedicated system user is created
+        automatically. Any other user must already be declared in users.users;
+        its account settings and primary group are not changed by this module.
+      '';
+    };
+
+    group = mkOption {
+      type = types.str;
+      default = "file-station";
+      description = ''
+        Primary group of the service process and owner group of private state.
+        The group is created if needed, including when using a custom name.
+      '';
+    };
+
     supplementaryGroups = mkOption {
       type = types.listOf types.str;
       default = [ ];
       example = [ "documents" ];
       description = ''
-        Existing groups granting the service process access to shared
-        directories. Share ownership, ACLs and mount permissions remain under
-        administrator control; the module does not recursively change them.
-      '';
-    };
-
-    allowedRoots = mkOption {
-      type = types.listOf (types.submodule {
-        options = {
-          path = mkOption {
-            type = absolutePath;
-            example = "/srv/documents";
-            description = "Existing normalized absolute directory bounding administrator-managed shares.";
-          };
-          readOnly = mkOption {
-            type = types.bool;
-            default = false;
-            description = "Disallow writable shares within this root and mount the root read-only in the service sandbox.";
-          };
-        };
-      });
-      default = [ ];
-      description = ''
-        Deployment-controlled filesystem bounds for administrator-managed shares.
-        At least one root is required; roots must not overlap one another, the
-        state directory, or the password file. Paths must already exist and
-        cannot traverse symlinks. Sandbox access is derived from these roots,
-        not from bootstrap or saved shares.
+        Existing groups granting the service process access to directories.
+        The process UID, groups, filesystem permissions, ACLs and mount options
+        determine which directories can be browsed and shared. This module
+        never recursively changes ownership or permissions of shared data.
       '';
     };
 
     shares = mkOption {
       default = { };
       description = ''
-        Initial shared-directory import only. Attribute names become stable
-        API share IDs. Import occurs once per state database, even when empty;
-        subsequent deployments never reconcile or overwrite saved shares.
-        Bootstrap paths must already exist, must not overlap one another, and
-        must be within allowedRoots with compatible read-only permissions.
+        Optional initial shared-directory import. By default no directories
+        are shared; add them in the UI. Attribute names become stable API IDs.
+        Import occurs once per state database, even when empty; deployments
+        never reconcile or overwrite saved shares. Paths must exist and be
+        accessible to the service user, must not overlap one another, and
+        must not overlap private state or the password file.
       '';
       type = types.attrsOf (types.submodule ({ name, ... }: {
         options = {
           name = mkOption {
             type = types.str;
             default = name;
-            description = "Display name in the NixOS File Station sidebar.";
+            description = "Display name in the File Station sidebar.";
           };
           path = mkOption {
             type = absolutePath;
             example = "/srv/documents";
-            description = "Existing absolute directory to expose through NixOS File Station.";
+            description = "Existing absolute directory to expose through File Station.";
           };
           readOnly = mkOption {
             type = types.bool;
             default = false;
-            description = "Disallow mutations through the API. OS-level read-only protection requires a readOnly allowed root.";
+            description = "Disallow mutations through the API; use mount permissions or ACLs for OS-level protection.";
           };
         };
       }));
@@ -151,77 +149,73 @@ in
   config = mkIf cfg.enable {
     assertions = [
       {
+        assertion = cfg.user != "root" && builtins.hasAttr cfg.user config.users.users
+          && (config.users.users.${cfg.user}.uid or null) != 0;
+        message = "services.file-station.user must name a declared non-root user.";
+      }
+      {
         assertion = !lib.hasPrefix "/nix/store/" cfg.passwordFile;
-        message = "services.nixos-file-station.passwordFile must be a runtime secret, not a Nix store path.";
+        message = "services.file-station.passwordFile must be a runtime secret, not a Nix store path.";
       }
       {
-        assertion = cfg.allowedRoots != [ ];
-        message = "services.nixos-file-station.allowedRoots must contain at least one directory.";
-      }
-      {
-        assertion = lib.all normalized ([ cfg.stateDir cfg.passwordFile ] ++ rootPaths ++ sharePaths);
-        message = "services.nixos-file-station stateDir, passwordFile, allowed roots and bootstrap share paths must be normalized absolute paths other than /.";
-      }
-      {
-        assertion = lib.all (valid: valid) (lib.imap0 (index: root:
-          lib.all (other: !overlaps root.path other.path) (lib.drop (index + 1) cfg.allowedRoots)
-        ) cfg.allowedRoots);
-        message = "services.nixos-file-station.allowedRoots must not overlap one another.";
+        assertion = lib.all normalized ([ cfg.stateDir cfg.passwordFile ] ++ sharePaths);
+        message = "services.file-station stateDir, passwordFile and bootstrap share paths must be normalized absolute paths other than /.";
       }
       {
         assertion = lib.all (path:
           !overlaps cfg.stateDir path
           && !overlaps cfg.passwordFile path
-          && !overlaps "/run/credentials/nixos-file-station.service/password" path
-        ) rootPaths;
-        message = "services.nixos-file-station allowed roots must not overlap stateDir, passwordFile or the service password credential.";
-      }
-      {
-        assertion = lib.all (share: lib.any (root:
-          contains root.path share.path && (!root.readOnly || share.readOnly)
-        ) cfg.allowedRoots) shares;
-        message = "services.nixos-file-station bootstrap shares must be within an allowed root and read-only when that root is read-only.";
+          && !overlaps credentialPath path
+        ) sharePaths;
+        message = "services.file-station bootstrap shares must not overlap stateDir, passwordFile or the service password credential.";
       }
       {
         assertion = lib.all (id: builtins.match "[A-Za-z0-9_-]+" id != null) (builtins.attrNames cfg.shares);
-        message = "services.nixos-file-station share IDs may contain only letters, digits, underscores and hyphens.";
+        message = "services.file-station share IDs may contain only letters, digits, underscores and hyphens.";
       }
       {
         assertion = lib.all (first:
           lib.all (second: first.id == second.id || !overlaps first.path second.path) shares
         ) shares;
-        message = "services.nixos-file-station share paths must not overlap one another.";
+        message = "services.file-station share paths must not overlap one another.";
       }
     ];
 
-    users.groups.nixos-file-station = { };
+    users.users = mkIf (cfg.user == "file-station") {
+      file-station = {
+        isSystemUser = true;
+        group = cfg.group;
+        description = "File Station service user";
+      };
+    };
+    users.groups.${cfg.group} = { };
 
-    systemd.tmpfiles.settings."nixos-file-station".${cfg.stateDir} = {
+    systemd.tmpfiles.settings."file-station".${cfg.stateDir} = {
       d = {
         mode = "0700";
-        user = "nixos";
-        group = "nixos-file-station";
+        user = cfg.user;
+        group = cfg.group;
       };
       Z = {
-        user = "nixos";
-        group = "nixos-file-station";
+        user = cfg.user;
+        group = cfg.group;
       };
     };
 
-    systemd.services.nixos-file-station = {
-      description = "NixOS File Station";
+    systemd.services.file-station = {
+      description = "File Station";
       wantedBy = [ "multi-user.target" ];
       wants = [ "network.target" ];
       after = [ "network.target" "systemd-tmpfiles-setup.service" ];
       unitConfig.RequiresMountsFor = map quotePath (lib.unique (
-        [ cfg.stateDir cfg.passwordFile ] ++ rootPaths
+        [ cfg.stateDir cfg.passwordFile ] ++ sharePaths
       ));
       restartTriggers = [ runtimeConfig ];
 
       serviceConfig = {
         Type = "simple";
-        User = "nixos";
-        Group = "nixos-file-station";
+        User = cfg.user;
+        Group = cfg.group;
         SupplementaryGroups = cfg.supplementaryGroups;
         ExecStart = utils.escapeSystemdExecArgs [
           (lib.getExe cfg.package) "-config" runtimeConfig
@@ -232,13 +226,8 @@ in
         RestartSec = 3;
         UMask = "0077";
 
+        # No filesystem remapping: actual service-user permissions govern shares.
         NoNewPrivileges = true;
-        ProtectSystem = "strict";
-        ProtectHome = "read-only";
-        ReadWritePaths = map quotePath ([ cfg.stateDir ] ++ map (root: root.path) writableRoots);
-        ReadOnlyPaths = map (root: quotePath root.path) readOnlyRoots;
-        PrivateTmp = true;
-        PrivateDevices = true;
         ProtectKernelTunables = true;
         ProtectKernelModules = true;
         ProtectKernelLogs = true;
@@ -255,7 +244,8 @@ in
         RestrictSUIDSGID = true;
         LockPersonality = true;
         MemoryDenyWriteExecute = true;
-        RemoveIPC = true;
+        # A reused UID or group may own IPC objects unrelated to this service.
+        RemoveIPC = false;
       };
     };
   };

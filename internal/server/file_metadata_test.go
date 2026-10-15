@@ -23,7 +23,7 @@ func newMetadataServer(t *testing.T) (*Server, string) {
 	}
 	app, err := New(Config{
 		IP: "127.0.0.1", Port: 8080, Password: "metadata-password", StateDir: filepath.Join(base, "state"),
-		AllowedRoots: []AllowedRoot{{Path: share}}, Shares: []Share{{ID: "files", Name: "Files", Path: share}},
+		Shares: []Share{{ID: "files", Name: "Files", Path: share}},
 	}, base)
 	if err != nil {
 		t.Fatal(err)

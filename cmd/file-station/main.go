@@ -2,34 +2,31 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"flag"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
-	"github.com/CYL96/NixOS-File-Station/internal/server"
+	"github.com/CYL96/File-Station/internal/server"
 )
 
 func main() {
-	configPath := flag.String("config", "config.json", "JSON configuration")
+	syscall.Umask(0077)
+	configPath := flag.String("config", os.Getenv("ConfigPath"), "JSON configuration; overrides ConfigPath and ignores PASSWORD and UMASK")
 	static := flag.String("static", "web/dist", "frontend assets")
 	flag.Parse()
 	if os.Geteuid() == 0 {
 		log.Fatal("refusing to run as root; use a dedicated service user")
 	}
-	if _, err := os.Stat(*static + "/index.html"); err != nil {
+	if _, err := os.Stat(filepath.Join(*static, "index.html")); err != nil {
 		log.Fatalf("frontend assets unavailable; build web/dist or provide -static: %v", err)
 	}
-	data, err := os.ReadFile(*configPath)
+	config, err := server.LoadConfig(*configPath)
 	if err != nil {
-		log.Fatal(err)
-	}
-	var config server.Config
-	if err = json.Unmarshal(data, &config); err != nil {
 		log.Fatal(err)
 	}
 	app, err := server.New(config, *static)
@@ -47,7 +44,7 @@ func main() {
 		defer done()
 		_ = httpServer.Shutdown(ctx)
 	}()
-	log.Printf("NixOS File Station listening on %s", config.Address())
+	log.Printf("File Station listening on %s", config.Address())
 	if err = httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)
 	}

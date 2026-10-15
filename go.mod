@@ -1,4 +1,4 @@
-module github.com/CYL96/NixOS-File-Station
+module github.com/CYL96/File-Station
 
 go 1.26.0
 

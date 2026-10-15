@@ -1,7 +1,6 @@
 export type Share = { id: string; name: string; readOnly: boolean };
 export type ManagedShare = Share & { path: string; available: boolean; error?: string };
-export type AllowedRoot = { path: string; readOnly: boolean };
-export type ShareSettingsData = { shares: ManagedShare[]; allowedRoots: AllowedRoot[] };
+export type ShareSettingsData = { shares: ManagedShare[] };
 export type ShareSettingsChange = { id?: string; pathChanged?: boolean; removed?: boolean };
 export type SettingsDirectory = { name: string; path: string };
 export type SettingsDirectories = { path: string; entries: SettingsDirectory[] };

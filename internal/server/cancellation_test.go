@@ -22,7 +22,7 @@ func TestCancelledQueuedMoveLeavesSource(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(files, "source.txt"), []byte("do not move"), 0640)
 	password := filepath.Join(base, "password")
 	_ = os.WriteFile(password, []byte("correct-password-123"), 0600)
-	app, err := New(Config{IP: "127.0.0.1", Port: 8080, StateDir: filepath.Join(base, "state"), PasswordFile: password, AllowedRoots: []AllowedRoot{{Path: files}}, Shares: []Share{{ID: "files", Name: "Files", Path: files}}}, base)
+	app, err := New(Config{IP: "127.0.0.1", Port: 8080, StateDir: filepath.Join(base, "state"), PasswordFile: password, Shares: []Share{{ID: "files", Name: "Files", Path: files}}}, base)
 	if err != nil {
 		t.Fatal(err)
 	}
