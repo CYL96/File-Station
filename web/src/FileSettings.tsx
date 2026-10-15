@@ -23,6 +23,6 @@ export function AdvancedSettings({ value, onClose, onSaved }: { value: FileSetti
     <h3>列显示</h3><p className="field-help">勾选要显示的列。名称列始终显示；列顺序在文件列表表头拖动调整。</p>
     <p className="field-help">权限以 Unix 八进制显示（含特殊权限位）。所有者与所属组无法解析名称时显示 UID/GID；创建时间不受文件系统支持时显示「—」。</p>
     <ul className="settings-columns">{draft.columns.map(column => <li key={column.key}><label className="settings-checkbox"><input type="checkbox" checked={column.visible} disabled={busy || column.key === 'name'} onChange={event => setDraft({ ...draft, columns: draft.columns.map(item => item.key === column.key ? { ...item, visible: event.target.checked } : item) })} />{columnLabels[column.key]}</label></li>)}</ul>
-    <p className="field-help">保存后应用于全部共享和回收站，并在刷新、重新登录或服务重启后保留。文件排序通过列表表头调整。</p>
+    <p className="field-help">保存后应用于全部共享和回收站，并在刷新、重新登录或服务重启后保留。文件排序通过列表表头或网格视图的「排序」菜单调整。</p>
   </fieldset>{error && <p className="form-error" role="alert">{error}</p>}</div><footer className="modal-actions"><button type="button" className="button" disabled={busy} onClick={onClose}>取消</button><button className="button primary" disabled={busy}>{busy ? <><span className="spinner" />正在保存…</> : <><Icon name="check" size={16} />保存设置</>}</button></footer></form></Modal>;
 }
