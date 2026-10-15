@@ -22,5 +22,6 @@ export function AdvancedSettings({ value, onClose, onSaved }: { value: FileSetti
     <label className="settings-checkbox"><input type="checkbox" checked={draft.showHidden} onChange={event => setDraft({ ...draft, showHidden: event.target.checked })} />显示隐藏项目</label>
     <h3>列显示</h3>
     <ul className="settings-columns">{draft.columns.map(column => <li key={column.key}><label className="settings-checkbox"><input type="checkbox" checked={column.visible} disabled={busy || column.key === 'name'} onChange={event => setDraft({ ...draft, columns: draft.columns.map(item => item.key === column.key ? { ...item, visible: event.target.checked } : item) })} />{columnLabels[column.key]}</label></li>)}</ul>
+
   </fieldset>{error && <p className="form-error" role="alert">{error}</p>}</div><footer className="modal-actions"><button type="button" className="button" disabled={busy} onClick={onClose}>取消</button><button className="button primary" disabled={busy}>{busy ? <><span className="spinner" />正在保存…</> : <><Icon name="check" size={16} />保存设置</>}</button></footer></form></Modal>;
 }
