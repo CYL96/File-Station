@@ -187,6 +187,16 @@
 .preview-actions .button{white-space:nowrap;flex-shrink:0}
 @container(max-width:720px){.file-dialog-preview>.modal-heading{grid-template-columns:minmax(0,1fr) auto;gap:6px}.file-dialog-preview>.modal-heading>.modal-close{grid-column:2;grid-row:1}.preview-actions{grid-column:1/-1;grid-row:2;justify-content:flex-end}}
 @media(max-width:680px){.file-dialog-preview>.modal-heading{grid-template-columns:minmax(0,1fr) auto;gap:6px}.file-dialog-preview>.modal-heading>.modal-close{grid-column:2;grid-row:1}.preview-actions{grid-column:1/-1;grid-row:2;justify-content:flex-end}.preview-resize-help{display:none}.preview-actions .button{padding-left:10px;padding-right:10px}}
+.file-dialog-preview>.preview-body.preview-body-image{padding:0;align-items:stretch;overflow:hidden;scrollbar-gutter:auto}
+.image-preview{display:flex;flex:1;flex-direction:column;min-width:0;min-height:0;overflow:hidden}
+.image-preview-toolbar{display:flex;flex-shrink:0;align-items:center;justify-content:center;gap:6px;padding:8px 12px;background:#fbfcfe;border-bottom:1px solid var(--border)}
+.image-preview-toolbar .button{min-width:32px;padding:6px 10px;white-space:nowrap}
+.image-preview-scale{min-width:5ch;text-align:right;font-size:12px;font-variant-numeric:tabular-nums;color:var(--muted)}
+.image-preview-viewport{position:relative;flex:1;min-width:0;min-height:0;overflow:hidden;user-select:none;background:#f4f7fb}
+.image-preview-layer{position:absolute;left:50%;top:50%;transform-origin:center;user-select:none}
+.image-preview-layer>.preview-image{display:block;width:100%;height:100%;max-width:none;max-height:none;min-width:0;min-height:0;margin:0;flex:none;pointer-events:none;user-select:none}
+.image-preview-pannable{cursor:grab}.image-preview-dragging{cursor:grabbing}
+@media(max-width:680px){.image-preview-toolbar{padding:6px 8px}}
 .file-thumbnail{padding:0;overflow:hidden;grid-template-rows:minmax(0,1fr);grid-template-columns:minmax(0,1fr)}
 .file-thumbnail img{display:block;width:100%;height:100%;min-width:0;min-height:0;object-fit:contain}
 .file-thumbnail:hover{box-shadow:0 0 0 1px #94bdf4}

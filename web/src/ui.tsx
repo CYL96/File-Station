@@ -3,6 +3,7 @@ import type { ReactNode } from 'react';
 import { apiURL, preview } from './api';
 import type { Entry } from './api';
 import { Markdown, isMarkdown } from './Markdown';
+import { ImagePreview } from './ImagePreview';
 import { useFileDialogWidth } from './useFileDialogWidth';
 import type { FileDialogKind } from './useFileDialogWidth';
 
@@ -69,6 +70,7 @@ export function Modal({ title, children, onClose, wide = false, headerContent, f
 export function Preview({ share, entry, onClose, onEdit }: { share: string; entry: Entry; onClose: () => void; onEdit?: () => void }) {
   const [content, setContent] = useState<{ url?: string; text?: string; error?: string }>({});
   useEffect(() => {
+    setContent({});
     const controller = new AbortController();
     let url: string | undefined;
     preview(share, entry.path, controller.signal).then(async ({ type, blob }) => {
@@ -84,7 +86,7 @@ export function Preview({ share, entry, onClose, onEdit }: { share: string; entr
     return () => { controller.abort(); if (url) URL.revokeObjectURL(url); };
   }, [share, entry.path]);
   return <Modal title={entry.name} wide fileDialog={{ kind: 'preview', content }} onClose={onClose} headerContent={<div className="preview-actions">{content.text !== undefined && onEdit && <button className="button" onClick={onEdit}><Icon name="edit" size={17} />编辑文件</button>}<a className="button primary" href={apiURL('download', { share, path: entry.path })} download={entry.name}><Icon name="download" size={17} />下载文件</a></div>}>
-    <div className="preview-body">{content.error ? <div className="empty-state"><Icon name="file" size={48} /><h3>无法预览此文件</h3><p>{content.error}</p><p>支持常见图片以及不超过 1 MiB 的 UTF-8 文本；其他文件请下载查看。</p></div> : content.url ? <img className="preview-image" src={content.url} alt={entry.name} onError={() => setContent({ error: '图片无法解码，文件可能已损坏或不是受支持的图片。' })} /> : content.text !== undefined ? isMarkdown(entry.name) ? <Markdown text={content.text} share={share} path={entry.path} /> : <pre className="preview-text">{content.text}</pre> : <div className="loading-state" role="status"><span className="spinner" />正在加载预览…</div>}</div>
+    <div className={`preview-body${content.url ? ' preview-body-image' : ''}`}>{content.error ? <div className="empty-state"><Icon name="file" size={48} /><h3>无法预览此文件</h3><p>{content.error}</p><p>支持常见图片以及不超过 1 MiB 的 UTF-8 文本；其他文件请下载查看。</p></div> : content.url ? <ImagePreview key={content.url} url={content.url} name={entry.name} onError={() => setContent({ error: '图片无法解码，文件可能已损坏或不是受支持的图片。' })} /> : content.text !== undefined ? isMarkdown(entry.name) ? <Markdown text={content.text} share={share} path={entry.path} /> : <pre className="preview-text">{content.text}</pre> : <div className="loading-state" role="status"><span className="spinner" />正在加载预览…</div>}</div>
     <footer className="modal-actions preview-footer"><span>{formatBytes(entry.size)} · {formatDate(entry.modified)}</span><span className="preview-resize-help">拖动右下角可调整宽度</span></footer>
   </Modal>;
 }
