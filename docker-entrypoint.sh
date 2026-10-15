@@ -18,6 +18,11 @@ validate_id() {
 }
 
 umask 077
+state_path="${ConfigPath-/var/lib/file-station}"
+case "$state_path" in
+  /*) ;;
+  *) fail "ConfigPath must be a nonempty absolute state directory" ;;
+esac
 uid="$(id -u)"
 gid="$(id -g)"
 if [ "$uid" = 0 ]; then
@@ -25,10 +30,11 @@ if [ "$uid" = 0 ]; then
   PGID="${PGID-1000}"
   validate_id PUID "$PUID"
   validate_id PGID "$PGID"
-  [ ! -L /var/lib/file-station ] || fail "state directory must not be a symbolic link"
-  mkdir -p /var/lib/file-station
+  [ ! -L "$state_path" ] || fail "state directory must not be a symbolic link"
+  mkdir -p -- "$state_path"
+  [ "$(readlink -f -- "$state_path")" != / ] || fail "ConfigPath must not be the filesystem root"
   # Never recurse into existing state or change ownership of shared mounts.
-  chown "$PUID:$PGID" /var/lib/file-station
+  chown "$PUID:$PGID" "$state_path"
   exec su-exec "$PUID:$PGID" /usr/local/bin/file-station "$@"
 fi
 

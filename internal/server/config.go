@@ -5,13 +5,14 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strconv"
 )
 
-// LoadConfig applies defaults and either a strict JSON file or PASSWORD and UMASK.
-// A nonempty path selects file-only configuration and ignores the environment.
-// With an empty path, only the environment is applied; path selection belongs to the caller.
-// New validates the resulting configuration and opens its resources.
+// LoadConfig applies defaults and either a strict JSON file or environment settings.
+// A nonempty path selects file-only configuration and ignores ConfigPath, PASSWORD,
+// and UMASK. With an empty path, ConfigPath selects the persistent state directory,
+// never a configuration file. New validates the configuration and opens its resources.
 func LoadConfig(path string) (Config, error) {
 	config := &Config{IP: "127.0.0.1", Port: 8080, StateDir: "/var/lib/file-station", Umask: "0022"}
 	if path != "" {
@@ -34,6 +35,18 @@ func LoadConfig(path string) (Config, error) {
 	}
 
 	config.IP = "0.0.0.0"
+	if value, ok := os.LookupEnv("ConfigPath"); ok {
+		if !filepath.IsAbs(value) {
+			return Config{}, fmt.Errorf("ConfigPath must be a nonempty absolute state directory path")
+		}
+		if filepath.Clean(value) == string(filepath.Separator) {
+			return Config{}, fmt.Errorf("ConfigPath state directory must not be the filesystem root")
+		}
+		if real, err := filepath.EvalSymlinks(value); err == nil && real == string(filepath.Separator) {
+			return Config{}, fmt.Errorf("ConfigPath state directory must not resolve to the filesystem root")
+		}
+		config.StateDir = value
+	}
 	config.Password = os.Getenv("PASSWORD")
 	if value, ok := os.LookupEnv("UMASK"); ok {
 		_, err := strconv.ParseUint(value, 8, 9)

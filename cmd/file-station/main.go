@@ -16,7 +16,7 @@ import (
 
 func main() {
 	syscall.Umask(0077)
-	configPath := flag.String("config", os.Getenv("ConfigPath"), "JSON configuration; overrides ConfigPath and ignores PASSWORD and UMASK")
+	configPath := flag.String("config", "", "JSON configuration file; ignores ConfigPath, PASSWORD and UMASK (without -config, ConfigPath selects the state directory)")
 	static := flag.String("static", "web/dist", "frontend assets")
 	flag.Parse()
 	if os.Geteuid() == 0 {

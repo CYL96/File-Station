@@ -10,7 +10,7 @@ File Station 是支持普通 Linux 用户、Docker 和 NixOS 的单管理员 Web
 
 ## Architecture & Data Flow
 
-- `cmd/file-station/main.go` 选择可选 JSON 配置和静态目录；`internal/server/config.go` 的 `LoadConfig` 按非空配置路径分离来源：有路径仅加载默认值 + 严格 JSON，完全忽略 `PASSWORD` / `UMASK`（包括空值和非法值）；无路径仅读取这两个业务环境变量，固定监听 `0.0.0.0:8080`、状态 `/var/lib/file-station`、首次零共享。`-config` 优先于大小写精确的 `ConfigPath`，显式空 flag 也优先；静态目录仅使用 `-static`，默认 `web/dist`，与配置来源独立。JSON 默认监听 `127.0.0.1`，`umask` 默认 `"0022"`，必须是 3 或 4 位、值不超过 `0777` 的八进制字符串，显式空值无效。入口调用 `server.New(Config, staticDir)`，拒绝 root 并负责启动与关闭。
+- `cmd/file-station/main.go` 仅通过显式 `-config` 选择可选 JSON 配置，flag 默认为空，不从环境变量读取 JSON 路径；`internal/server/config.go` 的 `LoadConfig` 按非空配置路径分离来源：有路径仅加载默认值 + 严格 JSON，完全忽略 `ConfigPath` / `PASSWORD` / `UMASK`（包括空值和非法值），状态目录由 JSON `stateDir` 决定；无路径读取这三个业务环境变量，`ConfigPath` 是保存设置、共享、任务、会话等 SQLite 状态的非空绝对目录，默认 `/var/lib/file-station`，显式空值、相对路径或指向根目录 `/` 的路径无效（包括 `filepath.Clean` 后为根目录，以及 `EvalSymlinks` 成功后为根目录）；普通非根绝对路径可含空格，绝不是 JSON 文件路径。环境变量模式固定监听 `0.0.0.0:8080`、首次零共享。静态目录仅使用 `-static`，默认 `web/dist`，与配置来源独立。JSON 默认监听 `127.0.0.1`，`umask` 默认 `"0022"`，必须是 3 或 4 位、值不超过 `0777` 的八进制字符串，显式空值无效。入口调用 `server.New(Config, staticDir)`，拒绝 root 并负责启动与关闭。
 - 后端集中在 `internal/server` 包。`Server` 持有配置、数据库、根目录句柄和任务状态；通过构造函数传入配置，不使用 DI 容器。
 - 前端由 `web/src/main.tsx` 挂载 `App.tsx`：全局状态留在 App，组件通过 props/callbacks 协作，局部状态留在组件；没有独立状态库或路由库。
 - `web/src/api.ts` 统一处理 JSON 请求、会话、CSRF 和错误；`api()` / `shareAPI()` 包装后端处理器。后台操作写入任务状态，SSE 推送更新，前端轮询兜底。
@@ -21,7 +21,7 @@ File Station 是支持普通 Linux 用户、Docker 和 NixOS 的单管理员 Web
 - `internal/server/`：按领域拆分文件的单一 Go 包，测试与实现同目录。
 - `web/src/`：功能组件、API 客户端、hooks 和 `styles.css`；共享 UI 原语在 `ui.tsx`。
 - `nix/`：前后端打包、NixOS 服务模块和 Go vendor hash。
-- `Dockerfile`：Node.js 24 / Go 1.26 多阶段构建，Alpine 入口短暂以 root 校验 `PUID` / `PGID`（脚本内默认 `1000:1000`，仅允许 `1`–`4294967294` 的十进制整数，无前导零，显式空值报错），仅 chown 状态目录本身，再用 `su-exec` 降权，由 Go 以新身份 chmod `0700`；应用始终非 root，不递归修改状态内容或共享。非 root `--user` 对未设置的 ID 沿用当前身份，显式不匹配的 `PUID` / `PGID` 报错，不自动提权。默认 ID 不放在 Docker ENV 中，避免覆盖非 root 当前身份。`compose.yaml` 仅显式传入 `PUID`、`PGID`、`UMASK`、`PASSWORD`、`ConfigPath`，无 `user:` 或密码 secret；密码无默认值、至少 6 字节，建议 12 字节以上，umask 必须加引号。宿主端口直接写 `127.0.0.1:8080:8080`，持久化 `./state` 并提供可选数据/只读 JSON 挂载。保留 `cap_drop: ALL`、入口所需 `CHOWN` / `SETUID` / `SETGID` 及 `no-new-privileges`，不需要 `FOWNER`。`su-exec` 清空附加组，不宣称 Docker `group_add` 保留。容器选 JSON 后完全忽略 `PASSWORD` / `UMASK`，应明确设置 `ip: "0.0.0.0"`；静态资源由镜像命令 `-static /usr/share/file-station` 指定。
+- `Dockerfile`：Node.js 24 / Go 1.26 多阶段构建，Alpine 入口短暂以 root 校验 `PUID` / `PGID`（脚本内默认 `1000:1000`，仅允许 `1`–`4294967294` 的十进制整数，无前导零，显式空值报错），按 `ConfigPath`（默认 `/var/lib/file-station`，非空绝对路径，目录本身不是符号链接且解析后不是根目录 `/`）准备状态目录，仅 chown 目录本身，再用 `su-exec` 降权，由 Go 以新身份 chmod 实际状态目录为 `0700`；应用始终非 root，不递归修改状态内容或共享。非 root `--user` 对未设置的 ID 沿用当前身份，显式不匹配的 `PUID` / `PGID` 报错，不自动提权。默认 ID 不放在 Docker ENV 中，避免覆盖非 root 当前身份。`compose.yaml` 仅显式传入 `PUID`、`PGID`、`UMASK`、`PASSWORD`、`ConfigPath`，无 `user:` 或密码 secret；密码无默认值、至少 6 字节，建议 12 字节以上，umask 必须加引号。宿主端口直接写 `127.0.0.1:8080:8080`，将 `./state` 持久挂载到 `${ConfigPath-/var/lib/file-station}`，与容器环境变量同步；推荐的自定义示例 `ConfigPath=/config` 对应 `./state:/config`，不是 config.json 路径。提供可选数据/只读 JSON 挂载。保留 `cap_drop: ALL`、入口所需 `CHOWN` / `SETUID` / `SETGID` 及 `no-new-privileges`，不需要 `FOWNER`。`su-exec` 清空附加组，不宣称 Docker `group_add` 保留。容器仅用显式 `-config` 选择 JSON，Go 文件模式完全忽略 `ConfigPath` / `PASSWORD` / `UMASK`，但入口始终独立校验 `ConfigPath` 并准备该目录，不解析 JSON 或重复解析 Go flags；JSON `stateDir` 通常必须与此目录及持久挂载目标一致，否则由管理员自行挂载并预备实际状态目录权限。JSON 应明确设置 `ip: "0.0.0.0"`；静态资源由镜像命令 `-static /usr/share/file-station` 指定，覆盖 CMD 使用 JSON 时必须完整保留该参数。
 
 ## Development Commands
 
@@ -53,7 +53,7 @@ docker build -t file-station:local .
 
 ## Important Files
 
-- `internal/server/config.go`：默认值与文件 / 环境变量二选一加载；本地推荐 JSON，NixOS 通过 `-config` 使用文件模式，Docker 默认环境变量模式。密码来源仅在所选模式内校验，不保留跨文件 / env 的密码清除分支。
+- `internal/server/config.go`：默认值与文件 / 环境变量二选一加载；本地推荐 JSON，NixOS 通过 `-config` 使用文件模式，Docker 默认环境变量模式。环境变量模式由 `ConfigPath` 选择持久状态目录，文件模式仅由 JSON `stateDir` 决定。密码来源仅在所选模式内校验，不保留跨文件 / env 的密码清除分支。
 - `internal/server/server.go`：配置结构、初始化、数据库建表、路由和公共中间件。
 - `internal/server/shares.go`：基于系统权限的目录浏览、私有路径保护、共享持久化和锁。
 - `internal/server/tasks.go`：后台任务、取消、SSE 和回收站。
