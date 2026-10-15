@@ -1,6 +1,8 @@
 package server
 
 import (
+	"encoding/json"
+	"net/http"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -43,6 +45,7 @@ func TestLoadConfigFileIgnoresEnvironment(t *testing.T) {
 					clearConfigEnvironment(t)
 					t.Setenv("PASSWORD", "env-password")
 					t.Setenv("UMASK", mask)
+					t.Setenv("ConfigPath", "relative/private-password-marker")
 					path := writeLoaderConfig(t, `{"ip":"10.0.0.1","port":9000,"stateDir":"/file-state",`+credential.json+`,"passwordSourceFile":"/file-source","umask":"0027","secureCookies":true,"shares":[{"id":"file","name":"File","path":"/file","readOnly":false}]}`)
 					config, err := LoadConfig(path)
 					if err != nil {
@@ -72,6 +75,7 @@ func TestLoadConfigFileOmittedFieldsIgnoreEnvironment(t *testing.T) {
 	}
 	t.Setenv("PASSWORD", "env-password")
 	t.Setenv("UMASK", "invalid")
+	t.Setenv("ConfigPath", "")
 	got, err := LoadConfig(path)
 	if err != nil {
 		t.Fatal(err)
@@ -107,6 +111,9 @@ func TestLoadConfigEnvironmentCredentials(t *testing.T) {
 			}
 			if config.Password != password || config.PasswordFile != "" || config.PasswordSourceFile != "" {
 				t.Fatal("PASSWORD must be used verbatim without secret-file fallbacks")
+			}
+			if config.StateDir != "/var/lib/file-station" {
+				t.Fatal("unset ConfigPath must retain the default state directory")
 			}
 			if len(config.Shares) != 0 {
 				t.Fatal("environment-only configuration must not bootstrap shares")
@@ -189,5 +196,130 @@ func TestLoadConfigFilePreservesExplicitZeroValues(t *testing.T) {
 	}
 	if config.IP != "" || config.Port != 0 || config.StateDir != "" || config.Password != "" || config.PasswordFile != "" || config.PasswordSourceFile != "" || config.SecureCookies || len(config.Shares) != 0 {
 		t.Fatal("explicit JSON zero values must not be replaced by defaults or environment")
+	}
+}
+
+func TestLoadConfigInvalidEnvironmentStateDirectory(t *testing.T) {
+	rootLink := filepath.Join(t.TempDir(), "root")
+	if err := os.Symlink(string(filepath.Separator), rootLink); err != nil {
+		t.Fatal(err)
+	}
+	for _, value := range []string{"", "state", "./state", "../state", "private-password-marker", "/", "/tmp/..", rootLink} {
+		t.Run("ConfigPath="+value, func(t *testing.T) {
+			clearConfigEnvironment(t)
+			t.Setenv("PASSWORD", "private-password-marker")
+			t.Setenv("ConfigPath", value)
+			_, err := LoadConfig("")
+			if err == nil || !strings.Contains(err.Error(), "ConfigPath") {
+				t.Fatalf("invalid state directory must identify ConfigPath: %v", err)
+			}
+			if strings.Contains(err.Error(), "private-password-marker") {
+				t.Fatal("configuration error leaked sensitive environment content")
+			}
+		})
+	}
+}
+
+func TestLoadConfigFileIgnoresConfigPath(t *testing.T) {
+	clearConfigEnvironment(t)
+	path := writeLoaderConfig(t, `{"stateDir":"/file-state","password":"file-password"}`)
+	for _, value := range []string{"", "relative", "/", "/tmp/..", filepath.Join(t.TempDir(), "unused state"), path} {
+		t.Run("ConfigPath="+value, func(t *testing.T) {
+			t.Setenv("ConfigPath", value)
+			config, err := LoadConfig(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if config.StateDir != "/file-state" || config.Password != "file-password" {
+				t.Fatal("ConfigPath must not override file configuration")
+			}
+		})
+	}
+}
+
+func TestLoadConfigEnvironmentStateDirectoryPersistsSettings(t *testing.T) {
+	clearConfigEnvironment(t)
+	state := filepath.Join(t.TempDir(), "saved state")
+	t.Setenv("ConfigPath", state)
+	t.Setenv("PASSWORD", "123123")
+	config, err := LoadConfig("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := &fileSettingsFixture{t: t, config: config, static: t.TempDir()}
+	t.Cleanup(f.stop)
+	f.start()
+	if raw := f.request("GET", "/api/settings/shares", "", http.StatusOK); string(raw) != "{\"shares\":[]}\n" {
+		t.Fatalf("environment configuration must start without shares: %s", raw)
+	}
+	sharePath := t.TempDir()
+	shareJSON, err := json.Marshal(Share{Name: "Saved share", Path: sharePath, ReadOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.request("POST", "/api/settings/shares/save", string(shareJSON), http.StatusOK)
+	var saved struct {
+		Shares []Share `json:"shares"`
+	}
+	if err := json.Unmarshal(f.request("GET", "/api/settings/shares", "", http.StatusOK), &saved); err != nil {
+		t.Fatal(err)
+	}
+	canonicalShare, err := filepath.EvalSymlinks(sharePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(saved.Shares) != 1 || saved.Shares[0].ID == "" || saved.Shares[0].Name != "Saved share" || saved.Shares[0].Path != canonicalShare || !saved.Shares[0].ReadOnly {
+		t.Fatalf("share was not saved: %+v", saved.Shares)
+	}
+	assertFileViewDocument(t, f.request("POST", "/api/settings/files/save", customFileViewDocument, http.StatusOK), customFileViewDocument)
+	database, err := os.Stat(filepath.Join(state, "state.sqlite"))
+	if err != nil {
+		t.Fatalf("database was not created under ConfigPath: %v", err)
+	}
+	f.stop()
+	f.config, err = LoadConfig("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.start()
+	reopened, err := os.Stat(filepath.Join(state, "state.sqlite"))
+	if err != nil || !os.SameFile(database, reopened) {
+		t.Fatalf("restart did not reuse the ConfigPath database: %v", err)
+	}
+	var restored struct {
+		Shares []Share `json:"shares"`
+	}
+	if err := json.Unmarshal(f.request("GET", "/api/settings/shares", "", http.StatusOK), &restored); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(restored.Shares, saved.Shares) {
+		t.Fatalf("shares changed across environment reload: got %+v, want %+v", restored.Shares, saved.Shares)
+	}
+	assertFileViewDocument(t, f.request("GET", "/api/settings/files", "", http.StatusOK), customFileViewDocument)
+}
+
+func TestLoadConfigEnvironmentStateDirectoryIsNotConfigurationFile(t *testing.T) {
+	clearConfigEnvironment(t)
+	contents := `{"password":"json-password","stateDir":"/json-state"}`
+	path := writeLoaderConfig(t, contents)
+	t.Setenv("ConfigPath", path)
+	t.Setenv("PASSWORD", "123123")
+	config, err := LoadConfig("")
+	if err != nil {
+		t.Fatalf("ConfigPath must not be decoded as JSON: %v", err)
+	}
+	if config.StateDir != path || config.Password != "123123" {
+		t.Fatal("ConfigPath file contents must not populate configuration")
+	}
+	app, err := New(config, t.TempDir())
+	if app != nil {
+		app.Close()
+	}
+	if err == nil {
+		t.Fatal("a regular file cannot be used as the state directory")
+	}
+	got, err := os.ReadFile(path)
+	if err != nil || string(got) != contents {
+		t.Fatalf("attempted startup modified the ConfigPath file: %v", err)
 	}
 }
