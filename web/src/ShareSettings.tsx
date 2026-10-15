@@ -80,7 +80,7 @@ export function ShareSettings({ onClose, onChanged }: { onClose: () => void; onC
           </section>
         </div>
       </>}
-    </div><footer className="modal-actions"><button className="button" disabled={busy} onClick={onClose}>关闭</button></footer>
+    </div>
   </Modal>
     {pickerOpen && draft && <SettingsDirectoryPicker roots={roots} initialPath={path} onClose={() => setPickerOpen(false)} onChoose={value => { setDraft({ ...draft, path: value }); setPickerOpen(false); }} />}
   </>;
