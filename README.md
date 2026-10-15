@@ -103,6 +103,16 @@ nix build path:.#default
 
 flake 支持 `x86_64-linux` 和 `aarch64-linux`。包内包含前端静态资源，运行时无需 Node.js，也无需另外指定 `-static`。
 
+### 更新已有用户服务
+
+若已配置 `nixos-file-station.service` 用户服务，且其启动程序为 `$HOME/.local/state/nixos-file-station/current/bin/nixos-file-station`，可运行：
+
+```sh
+./test/update-service.sh
+```
+
+脚本可从任意工作目录调用，会构建仓库的 Nix 包（包含前后端）、更新 `current` 链接，再通过 `systemctl --user` 重启服务并显示状态。构建失败时不执行重启；不会修改服务配置、密码或持久状态。此脚本不安装服务，也不更新下述 NixOS 系统服务。
+
 ## NixOS 服务
 
 在系统 flake 中加入本项目的 input，并导入 `nixosModules.default`。系统需已配置非 root 用户 `nixos`；模块复用该账户，不创建或修改其登录配置。以下示例使用已有的 `configuration.nix`；将主机名和系统架构替换为实际值，已有 flake 可合并对应的 input 和 module。
