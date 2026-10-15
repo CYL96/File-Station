@@ -218,6 +218,36 @@ func (s *Server) getTasks(w http.ResponseWriter, r *http.Request) error {
 	jsonResponse(w, tasks)
 	return nil
 }
+func (s *Server) clearTasks(w http.ResponseWriter, r *http.Request) error {
+	var b struct {
+		IDs []string `json:"ids"`
+	}
+	if err := decode(w, r, &b); err != nil {
+		return err
+	}
+	if len(b.IDs) > 0 {
+		tx, err := s.db.Begin()
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+		stmt, err := tx.Prepare("DELETE FROM tasks WHERE id=? AND status='done'")
+		if err != nil {
+			return err
+		}
+		defer stmt.Close()
+		for _, id := range b.IDs {
+			if _, err = stmt.Exec(id); err != nil {
+				return err
+			}
+		}
+		if err = tx.Commit(); err != nil {
+			return err
+		}
+	}
+	jsonResponse(w, map[string]bool{"ok": true})
+	return nil
+}
 func (s *Server) cancelTask(w http.ResponseWriter, r *http.Request) error {
 	var b struct {
 		ID string `json:"id"`

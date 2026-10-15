@@ -1,6 +1,6 @@
 { config, lib, pkgs, utils, ... }:
 let
-  cfg = config.services.nixos-webui;
+  cfg = config.services.nixos-file-station;
   inherit (lib) mkEnableOption mkIf mkOption types;
   absolutePath = types.strMatching "/.*";
   shares = lib.mapAttrsToList (id: share: {
@@ -12,11 +12,11 @@ let
   writableRoots = lib.filter (root: !root.readOnly) cfg.allowedRoots;
   readOnlyRoots = lib.filter (root: root.readOnly) cfg.allowedRoots;
   quotePath = path: lib.replaceStrings [ "%" ] [ "%%" ] (builtins.toJSON path);
-  runtimeConfig = pkgs.writeText "nixos-webui-config.json" (builtins.toJSON {
+  runtimeConfig = pkgs.writeText "nixos-file-station-config.json" (builtins.toJSON {
     inherit (cfg) ip port stateDir secureCookies allowedRoots;
     inherit shares;
     # systemd loads the root-readable secret into a service-private credential.
-    passwordFile = "/run/credentials/nixos-webui.service/password";
+    passwordFile = "/run/credentials/nixos-file-station.service/password";
   });
   contains = root: path: root == path || lib.hasPrefix (root + "/") path;
   overlaps = first: second: contains first second || contains second first;
@@ -26,14 +26,14 @@ let
       (lib.drop 1 (lib.splitString "/" path));
 in
 {
-  options.services.nixos-webui = {
-    enable = mkEnableOption "the single-administrator File Station";
+  options.services.nixos-file-station = {
+    enable = mkEnableOption "the single-administrator NixOS File Station";
 
     package = mkOption {
       type = types.package;
       default = pkgs.callPackage ./package.nix { };
       defaultText = lib.literalExpression "pkgs.callPackage ./package.nix { }";
-      description = "Package providing the nixos-webui executable and frontend assets.";
+      description = "Package providing the nixos-file-station executable and frontend assets.";
     };
 
     ip = mkOption {
@@ -55,23 +55,23 @@ in
 
     stateDir = mkOption {
       type = absolutePath;
-      default = "/var/lib/nixos-webui";
+      default = "/var/lib/nixos-file-station";
       description = ''
         Private persistent state directory, created with mode 0700 and owned
-        by nixos-webui. Keep it outside every allowed root. The SQLite share
+        by nixos-file-station. Keep it outside every allowed root. The SQLite share
         configuration here survives deployment changes and service restarts.
       '';
     };
 
     passwordFile = mkOption {
       type = absolutePath;
-      example = "/run/secrets/nixos-webui-password";
+      example = "/run/secrets/nixos-file-station-password";
       description = ''
         Absolute runtime path to a plaintext administrator password containing
         at least 6 bytes (12 or more recommended). Supply a string, not a Nix path literal, and do not
         use writeText or another store-producing function. The secret is read
         by systemd through LoadCredential, so it may remain root-owned 0600.
-        Password rotation takes effect after restarting nixos-webui.service.
+        Password rotation takes effect after restarting nixos-file-station.service.
       '';
     };
 
@@ -131,12 +131,12 @@ in
           name = mkOption {
             type = types.str;
             default = name;
-            description = "Display name in the File Station sidebar.";
+            description = "Display name in the NixOS File Station sidebar.";
           };
           path = mkOption {
             type = absolutePath;
             example = "/srv/documents";
-            description = "Existing absolute directory to expose through File Station.";
+            description = "Existing absolute directory to expose through NixOS File Station.";
           };
           readOnly = mkOption {
             type = types.bool;
@@ -152,64 +152,64 @@ in
     assertions = [
       {
         assertion = !lib.hasPrefix "/nix/store/" cfg.passwordFile;
-        message = "services.nixos-webui.passwordFile must be a runtime secret, not a Nix store path.";
+        message = "services.nixos-file-station.passwordFile must be a runtime secret, not a Nix store path.";
       }
       {
         assertion = cfg.allowedRoots != [ ];
-        message = "services.nixos-webui.allowedRoots must contain at least one directory.";
+        message = "services.nixos-file-station.allowedRoots must contain at least one directory.";
       }
       {
         assertion = lib.all normalized ([ cfg.stateDir cfg.passwordFile ] ++ rootPaths ++ sharePaths);
-        message = "services.nixos-webui stateDir, passwordFile, allowed roots and bootstrap share paths must be normalized absolute paths other than /.";
+        message = "services.nixos-file-station stateDir, passwordFile, allowed roots and bootstrap share paths must be normalized absolute paths other than /.";
       }
       {
         assertion = lib.all (valid: valid) (lib.imap0 (index: root:
           lib.all (other: !overlaps root.path other.path) (lib.drop (index + 1) cfg.allowedRoots)
         ) cfg.allowedRoots);
-        message = "services.nixos-webui.allowedRoots must not overlap one another.";
+        message = "services.nixos-file-station.allowedRoots must not overlap one another.";
       }
       {
         assertion = lib.all (path:
           !overlaps cfg.stateDir path
           && !overlaps cfg.passwordFile path
-          && !overlaps "/run/credentials/nixos-webui.service/password" path
+          && !overlaps "/run/credentials/nixos-file-station.service/password" path
         ) rootPaths;
-        message = "services.nixos-webui allowed roots must not overlap stateDir, passwordFile or the service password credential.";
+        message = "services.nixos-file-station allowed roots must not overlap stateDir, passwordFile or the service password credential.";
       }
       {
         assertion = lib.all (share: lib.any (root:
           contains root.path share.path && (!root.readOnly || share.readOnly)
         ) cfg.allowedRoots) shares;
-        message = "services.nixos-webui bootstrap shares must be within an allowed root and read-only when that root is read-only.";
+        message = "services.nixos-file-station bootstrap shares must be within an allowed root and read-only when that root is read-only.";
       }
       {
         assertion = lib.all (id: builtins.match "[A-Za-z0-9_-]+" id != null) (builtins.attrNames cfg.shares);
-        message = "services.nixos-webui share IDs may contain only letters, digits, underscores and hyphens.";
+        message = "services.nixos-file-station share IDs may contain only letters, digits, underscores and hyphens.";
       }
       {
         assertion = lib.all (first:
           lib.all (second: first.id == second.id || !overlaps first.path second.path) shares
         ) shares;
-        message = "services.nixos-webui share paths must not overlap one another.";
+        message = "services.nixos-file-station share paths must not overlap one another.";
       }
     ];
 
-    users.groups.nixos-webui = { };
-    users.users.nixos-webui = {
+    users.groups.nixos-file-station = { };
+    users.users.nixos-file-station = {
       isSystemUser = true;
-      group = "nixos-webui";
+      group = "nixos-file-station";
       home = cfg.stateDir;
       extraGroups = cfg.supplementaryGroups;
       description = "NixOS File Station service user";
     };
 
-    systemd.tmpfiles.settings."nixos-webui".${cfg.stateDir}.d = {
+    systemd.tmpfiles.settings."nixos-file-station".${cfg.stateDir}.d = {
       mode = "0700";
-      user = "nixos-webui";
-      group = "nixos-webui";
+      user = "nixos-file-station";
+      group = "nixos-file-station";
     };
 
-    systemd.services.nixos-webui = {
+    systemd.services.nixos-file-station = {
       description = "NixOS File Station";
       wantedBy = [ "multi-user.target" ];
       wants = [ "network.target" ];
@@ -221,8 +221,8 @@ in
 
       serviceConfig = {
         Type = "simple";
-        User = "nixos-webui";
-        Group = "nixos-webui";
+        User = "nixos-file-station";
+        Group = "nixos-file-station";
         SupplementaryGroups = cfg.supplementaryGroups;
         ExecStart = utils.escapeSystemdExecArgs [
           (lib.getExe cfg.package) "-config" runtimeConfig

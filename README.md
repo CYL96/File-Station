@@ -20,42 +20,42 @@
 ```sh
 npm --prefix web ci
 npm --prefix web run build
-go build -o /tmp/nixos-webui ./cmd/webui
+go build -o /tmp/nixos-file-station ./cmd/nixos-file-station
 
-mkdir -p "$HOME/webui-data/documents" "$HOME/webui-data/media" \
-  "$HOME/.local/state/nixos-webui" "$HOME/.config/nixos-webui"
-chmod 700 "$HOME/.local/state/nixos-webui" "$HOME/.config/nixos-webui"
+mkdir -p "$HOME/file-station-data/documents" "$HOME/file-station-data/media" \
+  "$HOME/.local/state/nixos-file-station" "$HOME/.config/nixos-file-station"
+chmod 700 "$HOME/.local/state/nixos-file-station" "$HOME/.config/nixos-file-station"
 
 # 密码至少 6 字节；长期部署建议至少 12 字节。不要提交密码。
-read -rs -p 'Administrator password: ' WEBUI_PASSWORD
+read -rs -p 'Administrator password: ' FILE_STATION_PASSWORD
 printf '\n'
-(umask 077; printf '%s' "$WEBUI_PASSWORD" > "$HOME/.config/nixos-webui/password")
-unset WEBUI_PASSWORD
+(umask 077; printf '%s' "$FILE_STATION_PASSWORD" > "$HOME/.config/nixos-file-station/password")
+unset FILE_STATION_PASSWORD
 ```
 
-创建 `$HOME/.config/nixos-webui/config.json`。将以下所有 `/absolute/home` 替换为 `$HOME` 对应的实际绝对路径；JSON 不展开环境变量。
+创建 `$HOME/.config/nixos-file-station/config.json`。将以下所有 `/absolute/home` 替换为 `$HOME` 对应的实际绝对路径；JSON 不展开环境变量。
 
 ```json
 {
   "ip": "127.0.0.1",
   "port": 8080,
-  "stateDir": "/absolute/home/.local/state/nixos-webui",
-  "passwordFile": "/absolute/home/.config/nixos-webui/password",
+  "stateDir": "/absolute/home/.local/state/nixos-file-station",
+  "passwordFile": "/absolute/home/.config/nixos-file-station/password",
   "secureCookies": false,
   "allowedRoots": [
-    {"path": "/absolute/home/webui-data/documents"},
-    {"path": "/absolute/home/webui-data/media", "readOnly": true}
+    {"path": "/absolute/home/file-station-data/documents"},
+    {"path": "/absolute/home/file-station-data/media", "readOnly": true}
   ],
   "shares": [
-    {"id": "documents", "name": "文档", "path": "/absolute/home/webui-data/documents"},
-    {"id": "media", "name": "媒体", "path": "/absolute/home/webui-data/media", "readOnly": true}
+    {"id": "documents", "name": "文档", "path": "/absolute/home/file-station-data/documents"},
+    {"id": "media", "name": "媒体", "path": "/absolute/home/file-station-data/media", "readOnly": true}
   ]
 }
 ```
 
 ```sh
-chmod 600 "$HOME/.config/nixos-webui/config.json" "$HOME/.config/nixos-webui/password"
-/tmp/nixos-webui -config "$HOME/.config/nixos-webui/config.json" -static ./web/dist
+chmod 600 "$HOME/.config/nixos-file-station/config.json" "$HOME/.config/nixos-file-station/password"
+/tmp/nixos-file-station -config "$HOME/.config/nixos-file-station/config.json" -static ./web/dist
 ```
 
 打开 <http://127.0.0.1:8080>。程序启动时必须能找到前端构建产物；上面的 `-static` 指向本地构建目录。
@@ -94,21 +94,21 @@ chmod 600 "$HOME/.config/nixos-webui/config.json" "$HOME/.config/nixos-webui/pas
 
 ```sh
 nix build path:.#default
-./result/bin/nixos-webui -config "$HOME/.config/nixos-webui/config.json"
+./result/bin/nixos-file-station -config "$HOME/.config/nixos-file-station/config.json"
 ```
 
 flake 支持 `x86_64-linux` 和 `aarch64-linux`。包内包含前端静态资源，运行时无需 Node.js，也无需另外指定 `-static`。
 
 ## NixOS 服务
 
-在系统 flake 中加入本项目的 input，并导入 `nixosModules.default`。以下示例使用已有的 `configuration.nix`；将项目路径、主机名和系统架构替换为实际值，已有 flake 可合并对应的 input 和 module。
+在系统 flake 中加入本项目的 input，并导入 `nixosModules.default`。以下示例使用已有的 `configuration.nix`；将主机名和系统架构替换为实际值，已有 flake 可合并对应的 input 和 module。
 
 ```nix
 {
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    webui.url = "path:/absolute/path/to/WebUIForNixos";
-    webui.inputs.nixpkgs.follows = "nixpkgs";
+    file-station.url = "github:CYL96/NixOS-File-Station";
+    file-station.inputs.nixpkgs.follows = "nixpkgs";
   };
 
   outputs = inputs@{ nixpkgs, ... }: {
@@ -116,7 +116,7 @@ flake 支持 `x86_64-linux` 和 `aarch64-linux`。包内包含前端静态资源
       system = "x86_64-linux";
       modules = [
         ./configuration.nix
-        inputs.webui.nixosModules.default
+        inputs.file-station.nixosModules.default
         {
           users.groups.documents = {};
           # 为新部署预先创建目录；不会递归修改已有数据的权限。
@@ -125,12 +125,12 @@ flake 支持 `x86_64-linux` 和 `aarch64-linux`。包内包含前端静态资源
             "d /srv/archive 2770 root documents - -"
           ];
 
-          services.nixos-webui = {
+          services.nixos-file-station = {
             enable = true;
             ip = "127.0.0.1";
             port = 8080;
-            passwordFile = "/run/secrets/nixos-webui-password";
-            stateDir = "/var/lib/nixos-webui";
+            passwordFile = "/run/secrets/nixos-file-station-password";
+            stateDir = "/var/lib/nixos-file-station";
             supplementaryGroups = [ "documents" ];
             allowedRoots = [
               { path = "/srv/documents"; }
@@ -149,7 +149,7 @@ flake 支持 `x86_64-linux` 和 `aarch64-linux`。包内包含前端静态资源
 }
 ```
 
-部署前通过秘密管理工具或管理员操作提供 `/run/secrets/nixos-webui-password`，密码要求与本地运行相同。该文件可以保持 root:root、`0600`；模块通过 systemd `LoadCredential` 传递给固定的非 root 用户 `nixos-webui`。**必须使用运行时路径字符串，不要用 Nix 路径字面量或 `writeText` 把密码放进 Nix store。** 修改密码后重启服务。
+部署前通过秘密管理工具或管理员操作提供 `/run/secrets/nixos-file-station-password`，密码要求与本地运行相同。该文件可以保持 root:root、`0600`；模块通过 systemd `LoadCredential` 传递给固定的非 root 用户 `nixos-file-station`。**必须使用运行时路径字符串，不要用 Nix 路径字面量或 `writeText` 把密码放进 Nix store。** 修改密码后重启服务。
 
 允许根目录和首次导入的共享目录必须在服务启动前存在。示例的 tmpfiles 规则适用于新建专用目录；已有数据应由管理员按需配置组权限或 ACL，不要直接递归 `chown`。只读目录也需要服务用户具备读取和目录遍历权限。模块以 `0700` 创建状态目录，保留该目录才能保留共享设置、任务和回收站元数据。也可设置 `shares = {};`，首次登录后再添加共享。
 
@@ -157,14 +157,14 @@ flake 支持 `x86_64-linux` 和 `aarch64-linux`。包内包含前端静态资源
 
 ```sh
 sudo nixos-rebuild switch --flake /path/to/system-flake#file-station
-systemctl status nixos-webui
-journalctl -u nixos-webui
-sudo systemctl restart nixos-webui
+systemctl status nixos-file-station
+journalctl -u nixos-file-station
+sudo systemctl restart nixos-file-station
 ```
 
 ## HTTPS、反向代理与防火墙
 
-局域网部署推荐通过 HTTPS 反向代理访问，并设置 `secureCookies = true`；NixOS 对应 `services.nixos-webui.secureCookies = true`。只监听回环地址时，应让代理连接该本地地址。
+局域网部署推荐通过 HTTPS 反向代理访问，并设置 `secureCookies = true`；NixOS 对应 `services.nixos-file-station.secureCookies = true`。只监听回环地址时，应让代理连接该本地地址。
 
 - 代理应保留原始 Host，前端与接口保持同源，不要拆分到不同源部署。
 - 后台事件使用 SSE：关闭 `/api/events` 的代理缓冲，并设置足够长的连接超时。

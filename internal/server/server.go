@@ -206,7 +206,7 @@ func (s *Server) originOK(r *http.Request) bool {
 	return err == nil && u.Host == r.Host && (u.Scheme == "http" || u.Scheme == "https")
 }
 func (s *Server) session(r *http.Request) (string, error) {
-	cookie, err := r.Cookie("webui_session")
+	cookie, err := r.Cookie("nixos_file_station_session")
 	if err != nil {
 		return "", fail(401, "请先登录")
 	}
@@ -245,9 +245,9 @@ func (s *Server) routes(static string) {
 		return nil
 	})
 	s.api("POST /api/logout", func(w http.ResponseWriter, r *http.Request) error {
-		cookie, _ := r.Cookie("webui_session")
+		cookie, _ := r.Cookie("nixos_file_station_session")
 		_, err := s.db.Exec("DELETE FROM sessions WHERE token=?", cookie.Value)
-		http.SetCookie(w, &http.Cookie{Name: "webui_session", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: s.config.SecureCookies})
+		http.SetCookie(w, &http.Cookie{Name: "nixos_file_station_session", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: s.config.SecureCookies})
 		jsonResponse(w, map[string]bool{"ok": true})
 		return err
 	})
@@ -272,6 +272,7 @@ func (s *Server) routes(static string) {
 	s.shareAPI("GET /api/preview", s.preview)
 	s.shareAPI("POST /api/operation", s.operation)
 	s.api("GET /api/tasks", s.getTasks)
+	s.api("POST /api/tasks/clear", s.clearTasks)
 	s.api("POST /api/tasks/cancel", s.cancelTask)
 	s.api("GET /api/events", s.events)
 	s.shareAPI("GET /api/trash", s.listTrash)
@@ -332,7 +333,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		errorResponse(w, err)
 		return
 	}
-	http.SetCookie(w, &http.Cookie{Name: "webui_session", Value: t, Path: "/", MaxAge: 43200, HttpOnly: true, Secure: s.config.SecureCookies, SameSite: http.SameSiteStrictMode})
+	http.SetCookie(w, &http.Cookie{Name: "nixos_file_station_session", Value: t, Path: "/", MaxAge: 43200, HttpOnly: true, Secure: s.config.SecureCookies, SameSite: http.SameSiteStrictMode})
 	jsonResponse(w, map[string]string{"username": "admin", "csrf": csrf})
 }
 func validName(name string) bool {

@@ -10,7 +10,7 @@
 let
   version = "1.0.0";
   frontend = buildNpmPackage {
-    pname = "nixos-webui-frontend";
+    pname = "nixos-file-station-frontend";
     inherit version;
     src = lib.cleanSource ../web;
     nodejs = nodejs_24;
@@ -29,7 +29,7 @@ let
   };
 in
 (buildGoModule.override { go = go_1_26; }) {
-  pname = "nixos-webui";
+  pname = "nixos-file-station";
   inherit version;
   src = lib.cleanSourceWith {
     src = lib.cleanSource ../.;
@@ -40,24 +40,24 @@ in
       in !builtins.elem topLevel [ "web" "node_modules" "result" ".direnv" ];
   };
   vendorHash = import ./vendor-hash.nix;
-  subPackages = [ "cmd/webui" ];
+  subPackages = [ "cmd/nixos-file-station" ];
   env.CGO_ENABLED = "0";
   ldflags = [ "-s" "-w" ];
   nativeBuildInputs = [ makeWrapper ];
 
   postInstall = ''
-    mkdir -p "$out/share/nixos-webui"
-    cp -r ${frontend}/. "$out/share/nixos-webui/"
-    mv "$out/bin/webui" "$out/bin/nixos-webui"
-    wrapProgram "$out/bin/nixos-webui" \
-      --add-flags "-static $out/share/nixos-webui"
+    mkdir -p "$out/share/nixos-file-station"
+    cp -r ${frontend}/. "$out/share/nixos-file-station/"
+    wrapProgram "$out/bin/nixos-file-station" \
+      --add-flags "-static $out/share/nixos-file-station"
   '';
 
   passthru = { inherit frontend; };
   meta = {
-    description = "Single-administrator File Station for NixOS shared directories";
+    description = "NixOS File Station for single-administrator shared-directory management";
+    homepage = "https://github.com/CYL96/NixOS-File-Station";
     license = lib.licenses.mit;
     platforms = lib.platforms.linux;
-    mainProgram = "nixos-webui";
+    mainProgram = "nixos-file-station";
   };
 }

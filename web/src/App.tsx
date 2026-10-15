@@ -3,7 +3,7 @@ import type { CSSProperties, MouseEvent } from 'react';
 import { ApiError, apiURL, configureSession, request, upload } from './api';
 import type { Conflict, Entry, FileColumnKey, FileSettings, FileSort, Operation, Session, Share, ShareSettingsChange, Task, TrashEntry } from './api';
 import { DestinationDialog, Login, NameDialog } from './dialogs';
-import { Icon, Modal, Preview, fileIcon, formatBytes, formatDate } from './ui';
+import { Icon, ImageThumbnail, Modal, Preview, fileIcon, formatBytes, formatDate } from './ui';
 import type { IconName } from './ui';
 import { DirectoryTree } from './DirectoryTree';
 import { ShareSettings } from './ShareSettings';
@@ -48,7 +48,7 @@ export default function App() {
   const [sidebar, setSidebar] = useState(false);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [uploads, setUploads] = useState<UploadTask[]>([]);
-  const [streamConnected, setStreamConnected] = useState(false);
+  const [clearingTasks, setClearingTasks] = useState(false);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
   const [clipboard, setClipboard] = useState<Operation | null>(null);
   const [dragging, setDragging] = useState(false);
@@ -85,6 +85,7 @@ export default function App() {
     setSession(null); setShares([]); setEntries([]); setTasks([]); setUploads([]); setModal(null); setDrawer(false); setSelected(new Set()); setClipboard(null); setContextMenu(null);
     setFileSettings(defaultFileSettings); setSort(defaultFileSettings.sort);
     setSizeSelection(null);
+    setClearingTasks(false);
     conflictRef.current?.resolve(null); conflictRef.current = null; setConflict(null);
     for (const controller of uploadControllers.current) controller.abort();
     uploadControllers.current.clear(); operations.current.clear(); previousTasks.current.clear();
@@ -166,22 +167,22 @@ export default function App() {
       }
       setTasks(data);
     };
-    const poll = () => { request<Task[]>('tasks', undefined, undefined, controller.signal).then(receive).catch(() => { /* Connection state is shown; next poll reconnects. */ }); };
+    const poll = () => { request<Task[]>('tasks', undefined, undefined, controller.signal).then(receive).catch(() => { /* Retry on the next poll. */ }); };
     const connect = () => {
       if (controller.signal.aborted) return;
       source = new EventSource(apiURL('events'));
-      source.onopen = () => { setStreamConnected(true); if (fallback) { clearInterval(fallback); fallback = undefined; } };
+      source.onopen = () => { if (fallback) { clearInterval(fallback); fallback = undefined; } };
       source.onmessage = event => {
-        try { receive(JSON.parse(event.data) as Task[]); } catch { setStreamConnected(false); }
+        try { receive(JSON.parse(event.data) as Task[]); } catch { /* Ignore malformed events; polling remains available. */ }
       };
       source.onerror = () => {
-        source?.close(); setStreamConnected(false); poll();
+        source?.close(); poll();
         if (!fallback) fallback = window.setInterval(poll, 5000);
         retry = window.setTimeout(connect, 5000);
       };
     };
     poll(); connect();
-    return () => { controller.abort(); source?.close(); clearTimeout(retry); clearInterval(fallback); setStreamConnected(false); };
+    return () => { controller.abort(); source?.close(); clearTimeout(retry); clearInterval(fallback); };
   }, [session]);
   useEffect(() => {
     if (!notice) return;
@@ -230,6 +231,29 @@ export default function App() {
   const picked = entries.filter(entry => selected.has(entry.trashId ?? entry.path));
   const single = picked.length === 1 ? picked[0] : null;
   const running = tasks.filter(task => task.status === 'running').length + uploads.filter(task => task.status === 'running' || task.status === 'queued').length;
+  const completedTasks = tasks.filter(task => task.status === 'done').length + uploads.filter(task => task.status === 'done').length;
+  const failedTasks = tasks.filter(task => task.status === 'error').length + uploads.filter(task => task.status === 'error').length;
+
+  async function clearSuccessfulTasks() {
+    if (clearingTasks || completedTasks === 0) return;
+    const epoch = authEpoch.current;
+    const taskIds = tasks.filter(task => task.status === 'done').map(task => task.id);
+    const uploadIds = new Set(uploads.filter(task => task.status === 'done').map(task => task.id));
+    setClearingTasks(true);
+    try {
+      await request('tasks/clear', { ids: taskIds });
+      if (epoch !== authEpoch.current) return;
+      const clearedIds = new Set(taskIds);
+      setTasks(current => current.filter(task => !clearedIds.has(task.id)));
+      setUploads(current => current.filter(task => !uploadIds.has(task.id)));
+      for (const id of taskIds) { operations.current.delete(id); previousTasks.current.delete(id); }
+      notify('已清除成功任务');
+    } catch (error) {
+      if (epoch === authEpoch.current) notify(error instanceof Error ? error.message : '清除失败', true);
+    } finally {
+      if (epoch === authEpoch.current) setClearingTasks(false);
+    }
+  }
   const pathParts = view.path.split('/').filter(Boolean);
 
   function applyNavigation(next: View) {
@@ -448,7 +472,7 @@ export default function App() {
     window.addEventListener('keydown', onKey); return () => window.removeEventListener('keydown', onKey);
   });
 
-  if (checking) return <main className="session-loading"><div className="brand-mark"><Icon name="folder" size={36} /></div><span className="spinner" /><p>正在连接 File Station…</p></main>;
+  if (checking) return <main className="session-loading"><div className="brand-mark"><Icon name="folder" size={36} /></div><span className="spinner" /><p>正在连接 NixOS File Station…</p></main>;
   if (!session) return <Login onLogin={acceptSession} initialError={loginError} />;
 
   const actions: { label: string; icon: IconName; disabled: boolean; run: () => void; danger?: boolean }[] = view.trash ? [
@@ -466,7 +490,7 @@ export default function App() {
   if (picked.length) actions.push({ label: '计算大小', icon: 'server', disabled: false, run: () => { setSizeSelection({ share: view.share, trash: view.trash, items: picked.map(entry => ({ path: entry.trashId ?? entry.path, name: entry.name })) }); } });
   return <div className="desktop">
     <header className="desktop-topbar"><a className="desktop-brand" href="/" onClick={event => { event.preventDefault(); if (shares[0]) navigate(shares[0].id); }}>文件管理工作空间</a><div className="topbar-right"><button className="topbar-button share-settings-entry" onClick={() => { setDrawer(false); setSidebar(false); setContextMenu(null); setModal({ kind: 'shares' }); }} aria-label="共享设置"><Icon name="folder" /><span>共享设置</span></button><button className={`topbar-button ${drawer ? 'active' : ''}`} onClick={() => setDrawer(!drawer)} aria-label="任务中心" aria-expanded={drawer}><Icon name="tasks" /><span className="topbar-button-text">任务中心</span>{running > 0 && <span className="task-badge">{running}</span>}</button><button className="topbar-button" aria-label="退出登录" onClick={async () => { try { await request('logout', {}); clearAuth(); } catch (error) { notify(error instanceof Error ? error.message : '退出失败', true); } }}><span className="avatar">A</span><span className="topbar-button-text">管理员</span><Icon name="logout" size={16} /></button></div></header>
-    <div className="workspace"><aside className={`sidebar ${sidebar ? 'sidebar-open' : ''}`}><div className="app-heading"><div className="app-icon"><Icon name="folder" size={25} /></div><div><h1>File Station</h1><p>文件管理</p></div></div><div className="sidebar-label">共享空间 <span>{shares.length}</span></div><DirectoryTree key={shareRevision} shares={shares} currentShare={view.share} currentPath={view.path} trash={view.trash} refresh={refresh} showHidden={showHidden} navigate={navigate} /><div className="sidebar-rule" /><button className={`share-button trash-link ${view.trash ? 'selected' : ''}`} onClick={() => { if (view.share) navigate(view.share, '', true); }} disabled={!view.share}><Icon name="trash" /><span>回收站</span></button><div className="sidebar-bottom"><button className="shortcut-link" onClick={() => setModal({ kind: 'help' })}><Icon name="help" size={16} />键盘快捷键<span>?</span></button></div></aside>{sidebar && <button className="sidebar-backdrop" aria-label="收起导航" onClick={() => setSidebar(false)} />}
+    <div className="workspace"><aside className={`sidebar ${sidebar ? 'sidebar-open' : ''}`}><div className="app-heading"><div className="app-icon"><Icon name="folder" size={25} /></div><div><h1>NixOS File Station</h1><p>文件管理</p></div></div><div className="sidebar-label">共享空间 <span>{shares.length}</span></div><DirectoryTree key={shareRevision} shares={shares} currentShare={view.share} currentPath={view.path} trash={view.trash} refresh={refresh} showHidden={showHidden} navigate={navigate} /><div className="sidebar-rule" /><button className={`share-button trash-link ${view.trash ? 'selected' : ''}`} onClick={() => { if (view.share) navigate(view.share, '', true); }} disabled={!view.share}><Icon name="trash" /><span>回收站</span></button><div className="sidebar-bottom"><button className="shortcut-link" onClick={() => setModal({ kind: 'help' })}><Icon name="help" size={16} />键盘快捷键<span>?</span></button></div></aside>{sidebar && <button className="sidebar-backdrop" aria-label="收起导航" onClick={() => setSidebar(false)} />}
       <main className="file-main">
         <input className="sr-only" ref={fileInput} type="file" multiple aria-label="选择上传文件" onChange={event => { queueUploads(Array.from(event.target.files ?? [])); event.target.value = ''; }} />
         <section className="file-panel" aria-label={view.trash ? '回收站文件' : '文件列表'} onDragOver={event => { if (!readOnly && !view.trash && event.dataTransfer.types.includes('Files')) { event.preventDefault(); setDragging(true); } }} onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragging(false); }} onDrop={event => { event.preventDefault(); setDragging(false); queueUploads(Array.from(event.dataTransfer.files)); }}>
@@ -475,7 +499,7 @@ export default function App() {
           <div className="file-area" tabIndex={0} aria-label="文件选择区域" onClick={event => { if (event.target === event.currentTarget) setSelected(new Set()); }} onContextMenu={event => { if (event.target === event.currentTarget) { event.preventDefault(); setContextMenu({ x: Math.min(event.clientX, window.innerWidth - 210), y: Math.min(event.clientY, window.innerHeight - 310) }); } }}>
             {loading ? <div className="loading-state" role="status"><span className="spinner" />正在读取文件…</div> : listError ? <div className="empty-state" role="alert"><div className="empty-icon error-icon"><Icon name="warning" size={36} /></div><h3>暂时无法读取目录</h3><p>{listError}</p><button className="button" onClick={() => setRefresh(value => value + 1)}><Icon name="refresh" size={16} />重新加载</button><button className="button" onClick={() => setModal({ kind: 'shares' })}><Icon name="folder" size={16} />共享设置</button></div> : !shares.length ? <div className="empty-state"><div className="empty-icon"><Icon name="server" size={42} /></div><h3>尚未配置共享目录</h3><p>打开共享设置，在部署允许的目录范围内添加共享，即可开始管理文件。</p><button className="button primary" onClick={() => setModal({ kind: 'shares' })}><Icon name="folder" size={17} />共享设置</button></div> : visible.length === 0 ? <div className="empty-state"><div className="empty-icon"><Icon name={filter ? 'search' : view.trash ? 'trash' : 'folder'} size={44} /></div><h3>{filter ? '没有匹配的文件' : view.trash ? '回收站是空的' : '给这里添一些内容'}</h3><p>{filter ? '试试其他名称，筛选仅在当前目录中进行。' : view.trash ? '移至回收站的文件会显示在这里。' : readOnly ? '此共享目录目前没有文件。' : '拖放文件到这里，或使用上方按钮上传。'}</p>{filter ? <button className="button" onClick={() => setFilter('')}>清除筛选</button> : !view.trash && !readOnly && <button className="button primary" onClick={() => fileInput.current?.click()}><Icon name="upload" size={17} />上传文件</button>}</div> : <>
               <div className={`file-table configured-table ${layout === 'grid' ? 'grid-table' : ''}`} style={tableStyle} role="table" aria-label="目录内容"><FileTableHeader columns={displayColumns} sort={sort} trash={view.trash} busy={settingsBusy} onSort={key => setSort(current => ({ key, ascending: current.key === key ? !current.ascending : true }))} onReorder={reorderColumn} selection={<input type="checkbox" aria-label="选择全部文件" checked={visible.length > 0 && visible.every(entry => selected.has(entry.trashId ?? entry.path))} ref={node => { if (node) node.indeterminate = selected.size > 0 && !visible.every(entry => selected.has(entry.trashId ?? entry.path)); }} onChange={event => setSelected(event.target.checked ? new Set(visible.map(entry => entry.trashId ?? entry.path)) : new Set())} />} />
-                <div className="table-body">{visible.map(entry => { const key = entry.trashId ?? entry.path; const isSelected = selected.has(key); return <div key={key} role="row" aria-selected={isSelected} className={`file-row ${isSelected ? 'row-selected' : ''} ${entry.isDir ? 'directory-entry' : ''}`} onClick={event => select(entry, event)} onDoubleClick={() => openEntry(entry)} onContextMenu={event => { event.preventDefault(); if (!selected.has(key)) setSelected(new Set([key])); setContextMenu({ x: Math.max(8, Math.min(event.clientX, window.innerWidth - 210)), y: Math.max(8, Math.min(event.clientY, window.innerHeight - 310)) }); }}><div role="cell" className="check-cell"><input type="checkbox" aria-label={`选择 ${entry.name}`} checked={isSelected} onClick={event => event.stopPropagation()} onChange={() => select(entry, undefined, true)} /></div>{displayColumns.map(column => column.key === 'name' ? <div key={column.key} role="cell" className="file-name-cell"><span className={`file-glyph ${entry.isDir ? 'folder-glyph' : fileIcon(entry) === 'image' ? 'image-glyph' : ''}`}><Icon name={fileIcon(entry)} size={layout === 'grid' ? 43 : 24} /></span><button className="file-name" title={entry.name} onClick={event => { event.stopPropagation(); if (view.trash) select(entry, event); else openEntry(entry); }}><span>{entry.name}</span>{entry.isSymlink && <span className="symlink-badge" title="符号链接">↗</span>}</button></div> : <div key={column.key} role="cell" className={`column-${column.key}`} title={view.trash && column.key === 'type' ? entry.path : undefined}>{cellValue(entry, column.key)}</div>)}</div>; })}</div></div>
+                <div className="table-body">{visible.map(entry => { const key = entry.trashId ?? entry.path; const isSelected = selected.has(key); return <div key={key} role="row" aria-selected={isSelected} className={`file-row ${isSelected ? 'row-selected' : ''} ${entry.isDir ? 'directory-entry' : ''}`} onClick={event => select(entry, event)} onDoubleClick={() => openEntry(entry)} onContextMenu={event => { event.preventDefault(); if (!selected.has(key)) setSelected(new Set([key])); setContextMenu({ x: Math.max(8, Math.min(event.clientX, window.innerWidth - 210)), y: Math.max(8, Math.min(event.clientY, window.innerHeight - 310)) }); }}><div role="cell" className="check-cell"><input type="checkbox" aria-label={`选择 ${entry.name}`} checked={isSelected} onClick={event => event.stopPropagation()} onChange={() => select(entry, undefined, true)} /></div>{displayColumns.map(column => column.key === 'name' ? <div key={column.key} role="cell" className="file-name-cell">{!entry.isDir && !entry.isSymlink && !view.trash && fileIcon(entry) === 'image' ? <ImageThumbnail share={view.share} entry={entry} onOpen={() => openEntry(entry)} size={layout === 'grid' ? 43 : 24} /> : <span className={`file-glyph ${entry.isDir ? 'folder-glyph' : fileIcon(entry) === 'image' ? 'image-glyph' : ''}`}><Icon name={fileIcon(entry)} size={layout === 'grid' ? 43 : 24} /></span>}<button className="file-name" title={entry.name} onClick={event => { event.stopPropagation(); if (view.trash) select(entry, event); else openEntry(entry); }}><span>{entry.name}</span>{entry.isSymlink && <span className="symlink-badge" title="符号链接">↗</span>}</button></div> : <div key={column.key} role="cell" className={`column-${column.key}`} title={view.trash && column.key === 'type' ? entry.path : undefined}>{cellValue(entry, column.key)}</div>)}</div>; })}</div></div>
             </>}
           </div><footer className="file-status"><span>{visible.length !== entries.length ? `${visible.length} / ${entries.length}` : visible.length} 个项目{selected.size > 0 && <><span className="status-divider">·</span>已选择 {selected.size} 个<span className="selected-size">（{formatBytes(picked.reduce((sum, entry) => sum + (entry.isDir ? 0 : entry.size), 0))}）</span></>}</span><span className="status-hint">{readOnly ? <><Icon name="lock" size={12} />只读共享目录</> : view.trash ? '永久删除后无法恢复' : <><Icon name="upload" size={13} />支持拖放上传</>}</span></footer>
           {dragging && <div className="drop-overlay"><Icon name="upload" size={48} /><h3>松开即可上传</h3><p>文件将保存到当前目录</p></div>}
@@ -485,7 +509,26 @@ export default function App() {
     {sizeSelection && <FileSizeDialog selection={sizeSelection} onClose={() => setSizeSelection(null)} />}
     {notice && <div className={`toast ${notice.error ? 'toast-error' : ''}`} role={notice.error ? 'alert' : 'status'}><Icon name={notice.error ? 'warning' : 'check'} size={19} /><span>{notice.text}</span><button aria-label="关闭提示" onClick={() => setNotice(null)}><Icon name="close" size={16} /></button></div>}
     {contextMenu && <div className="context-menu" role="menu" aria-label="文件操作菜单" style={{ left: contextMenu.x, top: contextMenu.y }} onKeyDown={event => { if (event.key === 'Escape') setContextMenu(null); if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')); const index = buttons.indexOf(document.activeElement as HTMLButtonElement); buttons[(index + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length]?.focus(); } }}>{actions.map((action, index) => <button key={action.label} autoFocus={index === 0} role="menuitem" disabled={action.disabled} className={action.danger ? 'danger-text' : ''} onClick={() => { setContextMenu(null); action.run(); }}><Icon name={action.icon} size={17} />{action.label}</button>)}{!view.trash && <><div className="menu-divider" /><button role="menuitem" disabled={readOnly} onClick={() => { setContextMenu(null); setModal({ kind: 'mkdir' }); }}><Icon name="plus" size={17} />新建文件夹</button><button role="menuitem" disabled={!clipboard || readOnly} onClick={() => { setContextMenu(null); void paste(); }}><Icon name="copy" size={17} />粘贴</button></>}</div>}
-    {drawer && <><button className="drawer-backdrop" aria-label="关闭任务中心" onClick={() => setDrawer(false)} /><aside className="task-drawer" aria-label="任务中心"><header className="drawer-header"><div><span className="eyebrow">ACTIVITY</span><h2>任务中心{running > 0 && <span className="running-count">{running} 进行中</span>}</h2></div><button className="icon-button" aria-label="关闭任务中心" onClick={() => setDrawer(false)}><Icon name="close" /></button></header><p className="drawer-description">文件传输与后台操作，在这里一目了然。</p><div className={`connection-status ${streamConnected ? '' : 'disconnected'}`}><span />{streamConnected ? '实时同步 · 切换目录不影响任务' : '实时连接恢复中 · 自动轮询任务状态'}</div><div className="task-list">{uploads.length === 0 && tasks.length === 0 && <div className="empty-state"><Icon name="tasks" size={42} /><h3>还没有任务</h3><p>上传、复制、移动和删除任务会显示在这里。</p></div>}{uploads.map(task => <article key={task.id} className="task-card"><div className="task-card-heading"><span className="task-icon"><Icon name="upload" size={19} /></span><div><h3 title={task.name}>{task.name}</h3><p>上传 · {formatBytes(task.size)}</p></div><span className={`task-state state-${task.status}`}>{statuses[task.status]}</span></div><progress aria-label={`${task.name} 上传进度`} max={Math.max(task.size, 1)} value={task.status === 'done' ? Math.max(task.size, 1) : task.loaded} /><div className="task-card-footer"><span>{task.status === 'running' && task.loaded >= task.size ? '服务器正在保存…' : `${formatBytes(task.loaded)} / ${formatBytes(task.size)}`}</span>{(task.status === 'running' || task.status === 'queued') && <button onClick={() => { task.controller.abort(); setUploads(current => current.map(item => item.id === task.id ? { ...item, status: 'cancelled' } : item)); }} aria-label={`取消上传 ${task.name}`}>取消</button>}</div>{task.error && task.status === 'error' && <p className="task-error">{task.error}</p>}</article>)}{tasks.map(task => <article key={task.id} className="task-card"><div className="task-card-heading"><span className="task-icon"><Icon name={task.kind === 'copy' ? 'copy' : task.kind === 'move' ? 'move' : 'trash'} size={19} /></span><div><h3>{taskLabels[task.kind] ?? task.kind}</h3><p className="task-id">任务 {task.id.slice(0, 8)}</p></div><span className={`task-state state-${task.status}`}>{statuses[task.status]}</span></div><progress aria-label={`${taskLabels[task.kind] ?? task.kind}任务进度`} max={Math.max(task.total, task.completed, 1)} value={task.status === 'done' ? Math.max(task.total, task.completed, 1) : task.completed} /><div className="task-card-footer"><span>{task.completed} / {task.total} 个项目</span>{task.status === 'running' && <button aria-label={`取消任务 ${task.id}`} onClick={async () => { try { await request('tasks/cancel', { id: task.id }); notify('已发送任务取消请求'); } catch (error) { notify(error instanceof Error ? error.message : '取消失败', true); } }}>取消任务</button>}{task.status === 'error' && operations.current.has(task.id) && <button onClick={() => { void retryTask(task); }}>重新处理</button>}</div>{task.error && <p className="task-error">{task.error}</p>}</article>)}</div><footer className="drawer-foot">上传取消会中止传输；后台任务取消不撤销已完成的项目。</footer></aside></>}
+    {drawer && <>
+      <button className="drawer-backdrop" aria-label="关闭任务中心" onClick={() => setDrawer(false)} />
+      <aside className="task-drawer" aria-label="任务中心">
+        <header className="drawer-header">
+          <button className="button clear-successful-tasks" disabled={clearingTasks || completedTasks === 0} onClick={() => { void clearSuccessfulTasks(); }}><Icon name="trash" size={15} />{clearingTasks ? '正在清除…' : '一键清除已成功'}</button>
+          <button className="icon-button" aria-label="关闭任务中心" onClick={() => setDrawer(false)}><Icon name="close" /></button>
+        </header>
+        <dl className="task-statistics" aria-label="任务统计" aria-live="polite">
+          <div><dt>全部</dt><dd>{tasks.length + uploads.length}</dd></div>
+          <div className="stat-done"><dt>已完成</dt><dd>{completedTasks}</dd></div>
+          <div className="stat-running"><dt>进行中</dt><dd>{running}</dd></div>
+          <div className="stat-error"><dt>失败</dt><dd>{failedTasks}</dd></div>
+        </dl>
+        <div className="task-list">
+          {uploads.length === 0 && tasks.length === 0 && <div className="empty-state"><Icon name="tasks" size={42} /><h3>还没有任务</h3><p>上传、复制、移动和删除任务会显示在这里。</p></div>}
+          {uploads.map(task => <article key={task.id} className="task-card"><div className="task-card-heading"><span className="task-icon"><Icon name="upload" size={19} /></span><div><h3 title={task.name}>{task.name}</h3><p>上传 · {formatBytes(task.size)}</p></div><span className={`task-state state-${task.status}`}>{statuses[task.status]}</span></div><progress aria-label={`${task.name} 上传进度`} max={Math.max(task.size, 1)} value={task.status === 'done' ? Math.max(task.size, 1) : task.loaded} /><div className="task-card-footer"><span>{task.status === 'running' && task.loaded >= task.size ? '服务器正在保存…' : `${formatBytes(task.loaded)} / ${formatBytes(task.size)}`}</span>{(task.status === 'running' || task.status === 'queued') && <button onClick={() => { task.controller.abort(); setUploads(current => current.map(item => item.id === task.id ? { ...item, status: 'cancelled' } : item)); }} aria-label={`取消上传 ${task.name}`}>取消</button>}</div>{task.error && task.status === 'error' && <p className="task-error">{task.error}</p>}</article>)}
+          {tasks.map(task => <article key={task.id} className="task-card"><div className="task-card-heading"><span className="task-icon"><Icon name={task.kind === 'copy' ? 'copy' : task.kind === 'move' ? 'move' : 'trash'} size={19} /></span><div><h3>{taskLabels[task.kind] ?? task.kind}</h3><p className="task-id">任务 {task.id.slice(0, 8)}</p></div><span className={`task-state state-${task.status}`}>{statuses[task.status]}</span></div><progress aria-label={`${taskLabels[task.kind] ?? task.kind}任务进度`} max={Math.max(task.total, task.completed, 1)} value={task.status === 'done' ? Math.max(task.total, task.completed, 1) : task.completed} /><div className="task-card-footer"><span>{task.completed} / {task.total} 个项目</span>{task.status === 'running' && <button aria-label={`取消任务 ${task.id}`} onClick={async () => { try { await request('tasks/cancel', { id: task.id }); notify('已发送任务取消请求'); } catch (error) { notify(error instanceof Error ? error.message : '取消失败', true); } }}>取消任务</button>}{task.status === 'error' && operations.current.has(task.id) && <button onClick={() => { void retryTask(task); }}>重新处理</button>}</div>{task.error && <p className="task-error">{task.error}</p>}</article>)}
+        </div>
+      </aside>
+    </>}
     {modal?.kind === 'shares' && <ShareSettings onClose={() => setModal(null)} onChanged={refreshShares} />}
     {modal?.kind === 'advanced' && <AdvancedSettings value={fileSettings} onClose={() => setModal(null)} onSaved={data => { setFileSettings(data); setSelected(new Set()); anchor.current = null; setContextMenu(null); setModal(null); notify('高级设置已保存'); }} />}
     {modal?.kind === 'edit' && <TextEditor share={modal.share} path={modal.entry.path} name={modal.entry.name} onClose={() => setModal(null)} onSaved={() => setRefresh(value => value + 1)} />}

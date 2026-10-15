@@ -1,4 +1,4 @@
-# Repository Guidelines
+# NixOS File Station
 
 - 本文件只保留帮助 agent 修改仓库的持久指引：架构、代码约定、工具链和验证方式。
 - `README.md` 面向使用者，只介绍项目功能、安装配置、使用、部署和安全限制。
@@ -10,7 +10,7 @@ NixOS File Station 是单管理员 Web 文件管理器。Go 服务提供 API 和
 
 ## Architecture & Data Flow
 
-- `cmd/webui/main.go` 读取 JSON 配置，调用 `server.New(Config, staticDir)`，负责服务启动与关闭。
+- `cmd/nixos-file-station/main.go` 读取 JSON 配置，调用 `server.New(Config, staticDir)`，负责服务启动与关闭。
 - 后端集中在 `internal/server` 包。`Server` 持有配置、数据库、根目录句柄和任务状态；通过构造函数传入配置，不使用 DI 容器。
 - 前端由 `web/src/main.tsx` 挂载 `App.tsx`：全局状态留在 App，组件通过 props/callbacks 协作，局部状态留在组件；没有独立状态库或路由库。
 - `web/src/api.ts` 统一处理 JSON 请求、会话、CSRF 和错误；`api()` / `shareAPI()` 包装后端处理器。后台操作写入任务状态，SSE 推送更新，前端轮询兜底。
@@ -30,8 +30,8 @@ NixOS File Station 是单管理员 Web 文件管理器。Go 服务提供 API 和
 nix develop path:.                         # 可选，提供所需工具链
 npm --prefix web ci
 npm --prefix web run build                 # tsc -b + Vite
-go build -o /tmp/nixos-webui ./cmd/webui
-/tmp/nixos-webui -config "$HOME/.config/nixos-webui/config.json" -static ./web/dist
+go build -o /tmp/nixos-file-station ./cmd/nixos-file-station
+/tmp/nixos-file-station -config "$HOME/.config/nixos-file-station/config.json" -static ./web/dist
 npm --prefix web run dev                   # 另开终端，前端热更新
 go test -race ./...
 go vet ./...
@@ -66,5 +66,5 @@ Go 依赖变更后执行 `go mod tidy`，并将 `nix/vendor-hash.nix` 更新为 
 ## Testing & QA
 
 - 后端沿用标准 `testing`、`httptest.NewServer`、cookie jar 和 `t.TempDir()`，使用真实临时文件及 SQLite。扩展相邻 `*_test.go`，覆盖可观察行为与边界，尤其路径/符号链接、权限、只读、CSRF、取消、冲突及持久化。
-- 执行 `go test -race ./...`、`go vet ./...` 和前端 build；打包或依赖变更另运行 Nix build。Nix 包只指定 `cmd/webui`，不能代替服务测试。
+- 执行 `go test -race ./...`、`go vet ./...` 和前端 build；打包或依赖变更另运行 Nix build。Nix 包只指定 `cmd/nixos-file-station`，不能代替服务测试。
 - 前端没有测试 runner、独立 lint 脚本或覆盖率门槛；严格 TypeScript 检查包含在 build 中。UI 修改需在真实后端上用浏览器验证受影响流程及窄屏布局，不能只以打包成功作为行为证明。

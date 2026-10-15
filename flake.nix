@@ -16,7 +16,7 @@
         in
         {
           default = package;
-          nixos-webui = package;
+          nixos-file-station = package;
           frontend = package.frontend;
         });
 

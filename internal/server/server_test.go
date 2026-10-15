@@ -170,3 +170,115 @@ func TestFileLifecycleAndBoundaries(t *testing.T) {
 	request("POST", "/api/logout", nil, 200)
 	request("GET", "/api/files?share=files", nil, 401)
 }
+
+func TestClearTasksOnlyDeletesRequestedSuccessfulTasks(t *testing.T) {
+	base := t.TempDir()
+	files := filepath.Join(base, "files")
+	if err := os.Mkdir(files, 0750); err != nil {
+		t.Fatal(err)
+	}
+	app, err := New(Config{IP: "127.0.0.1", Port: 8080, StateDir: filepath.Join(base, "state"), Password: "correct-password-123", AllowedRoots: []AllowedRoot{{Path: files}}, Shares: []Share{{ID: "files", Name: "Files", Path: files}}}, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer app.Close()
+	httpServer := httptest.NewServer(app)
+	defer httpServer.Close()
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &http.Client{Jar: jar}
+	csrf := ""
+	request := func(method, route string, body any, want int) []byte {
+		t.Helper()
+		data, err := json.Marshal(body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req, err := http.NewRequest(method, httpServer.URL+route, bytes.NewReader(data))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("X-CSRF-Token", csrf)
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		raw, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.StatusCode != want {
+			t.Fatalf("%s %s: got %d wanted %d: %s", method, route, resp.StatusCode, want, raw)
+		}
+		return raw
+	}
+	assertTasks := func(want map[string]string) {
+		t.Helper()
+		var tasks []Task
+		if err := json.Unmarshal(request("GET", "/api/tasks", nil, 200), &tasks); err != nil {
+			t.Fatal(err)
+		}
+		if len(tasks) != len(want) {
+			t.Fatalf("got tasks %+v, wanted statuses %v", tasks, want)
+		}
+		for _, task := range tasks {
+			if status, ok := want[task.ID]; !ok || task.Status != status {
+				t.Fatalf("unexpected task %+v, wanted statuses %v", task, want)
+			}
+		}
+	}
+	clear := func(ids []string) {
+		t.Helper()
+		var response struct {
+			OK bool `json:"ok"`
+		}
+		if err := json.Unmarshal(request("POST", "/api/tasks/clear", map[string]any{"ids": ids}, 200), &response); err != nil {
+			t.Fatal(err)
+		}
+		if !response.OK {
+			t.Fatal("clear did not acknowledge success")
+		}
+	}
+	want := map[string]string{
+		"selected-done": "done",
+		"' OR 1=1 --":   "done",
+		"other-done":    "done",
+		"running":       "running",
+		"error":         "error",
+		"cancelled":     "cancelled",
+	}
+	for id, status := range want {
+		if err := app.saveTask(&Task{ID: id, Kind: "copy", Status: status, Total: 1}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	snapshot := []string{"selected-done", "' OR 1=1 --", "running", "error", "cancelled", "missing"}
+	request("POST", "/api/tasks/clear", map[string]any{"ids": snapshot}, 401)
+	var auth map[string]string
+	if err := json.Unmarshal(request("POST", "/api/login", map[string]string{"password": "correct-password-123"}, 200), &auth); err != nil {
+		t.Fatal(err)
+	}
+	request("POST", "/api/tasks/clear", map[string]any{"ids": snapshot}, 403)
+	csrf = auth["csrf"]
+	request("POST", "/api/tasks/clear", map[string]any{"ids": "not-an-array"}, 400)
+	request("POST", "/api/tasks/clear", map[string]any{"ids": []string{}, "unexpected": true}, 400)
+	assertTasks(want)
+	clear([]string{})
+	assertTasks(want)
+	clear(snapshot)
+	delete(want, "selected-done")
+	delete(want, "' OR 1=1 --")
+	assertTasks(want)
+	assertTasks(want)
+	if err := app.saveTask(&Task{ID: "finished-after-snapshot", Kind: "copy", Status: "done", Completed: 1, Total: 1}); err != nil {
+		t.Fatal(err)
+	}
+	want["finished-after-snapshot"] = "done"
+	clear(snapshot)
+	assertTasks(want)
+	clear([]string{})
+	assertTasks(want)
+}

@@ -1,4 +1,4 @@
-module example.com/nixos-webui
+module github.com/CYL96/NixOS-File-Station
 
 go 1.26.0
 

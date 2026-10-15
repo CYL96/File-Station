@@ -11,7 +11,7 @@ import (
 	"syscall"
 	"time"
 
-	"example.com/nixos-webui/internal/server"
+	"github.com/CYL96/NixOS-File-Station/internal/server"
 )
 
 func main() {
@@ -47,7 +47,7 @@ func main() {
 		defer done()
 		_ = httpServer.Shutdown(ctx)
 	}()
-	log.Printf("File Station listening on %s", config.Address())
+	log.Printf("NixOS File Station listening on %s", config.Address())
 	if err = httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)
 	}
