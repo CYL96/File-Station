@@ -96,7 +96,7 @@ export function TextEditor({ share, path, name, onClose, onSaved }: { share: str
       setConflict(cause instanceof ApiError && cause.status === 409);
     } finally { writing.current = false; setBusy(false); }
   }
-  return <Modal title={`编辑文件 · ${name}`} wide onClose={close} headerContent={<>
+  return <Modal title={`编辑文件 · ${name}`} wide fileDialog={{ kind: 'editor', content: text, mode }} onClose={close} headerContent={<>
     {markdown && !loading && document && <div className="markdown-modes" role="group" aria-label="Markdown 编辑模式">{([['source', '源代码编辑'], ['split', '对比编辑'], ['visual', '预览编辑']] as const).map(([value, label]) => <button key={value} className="button" aria-pressed={mode === value} disabled={busy} onClick={() => setMode(value)}>{label}</button>)}</div>}
     <div className="editor-actions"><button className="button" disabled={busy || loading || !!confirm} onClick={reload}><Icon name="refresh" size={16} />重新读取</button><button className="button primary" disabled={!document || loading || busy || !dirty || tooLarge || conflict || !!confirm} onClick={() => { void save(); }}>{busy ? <span className="spinner" /> : <Icon name="check" size={16} />}保存修改</button></div>
   </>}><div className="text-editor-body" onKeyDown={event => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') { event.preventDefault(); void save(); } }}>

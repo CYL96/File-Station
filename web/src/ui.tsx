@@ -3,6 +3,8 @@ import type { ReactNode } from 'react';
 import { apiURL, preview } from './api';
 import type { Entry } from './api';
 import { Markdown, isMarkdown } from './Markdown';
+import { useFileDialogWidth } from './useFileDialogWidth';
+import type { FileDialogKind } from './useFileDialogWidth';
 
 export type IconName = 'folder' | 'file' | 'image' | 'trash' | 'upload' | 'download' | 'plus' | 'search' | 'chevron' | 'refresh' | 'copy' | 'move' | 'edit' | 'close' | 'tasks' | 'check' | 'logout' | 'menu' | 'grid' | 'list' | 'restore' | 'eye' | 'lock' | 'help' | 'server' | 'arrow' | 'warning';
 const shapes: Record<IconName, ReactNode> = {
@@ -37,16 +39,17 @@ const shapes: Record<IconName, ReactNode> = {
 export function Icon({ name, size = 20, className = '' }: { name: IconName; size?: number; className?: string }) {
   return <svg aria-hidden="true" width={size} height={size} className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">{shapes[name]}</svg>;
 }
-export function Modal({ title, children, onClose, wide = false, headerContent }: { title: string; children: ReactNode; onClose: () => void; wide?: boolean; headerContent?: ReactNode }) {
+export function Modal({ title, children, onClose, wide = false, headerContent, fileDialog }: { title: string; children: ReactNode; onClose: () => void; wide?: boolean; headerContent?: ReactNode; fileDialog?: { kind: FileDialogKind; content: unknown; mode?: string } }) {
   const ref = useRef<HTMLDialogElement>(null);
   const backdropPress = useRef(false);
+  useFileDialogWidth(ref, fileDialog?.kind, fileDialog?.content, fileDialog?.mode);
   useEffect(() => {
     const dialog = ref.current!;
     const focused = document.activeElement as HTMLElement | null;
     dialog.showModal();
     return () => { dialog.close(); focused?.focus(); };
   }, []);
-  return <dialog ref={ref} className={`modal ${wide ? 'modal-wide' : ''}`} aria-label={title} onCancel={event => { event.preventDefault(); onClose(); }} onPointerDown={event => { const bounds = event.currentTarget.getBoundingClientRect(); backdropPress.current = event.target === event.currentTarget && (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom); }} onClick={event => { const startedOutside = backdropPress.current; backdropPress.current = false; if (startedOutside && event.target === ref.current) { const bounds = ref.current!.getBoundingClientRect(); if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) onClose(); } }}>
+  return <dialog ref={ref} className={`modal ${wide ? 'modal-wide' : ''} ${fileDialog ? `file-dialog file-dialog-${fileDialog.kind}` : ''}`} aria-label={title} onCancel={event => { event.preventDefault(); onClose(); }} onPointerDown={event => { const bounds = event.currentTarget.getBoundingClientRect(); backdropPress.current = event.target === event.currentTarget && (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom); }} onClick={event => { const startedOutside = backdropPress.current; backdropPress.current = false; if (startedOutside && event.target === ref.current) { const bounds = ref.current!.getBoundingClientRect(); if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) onClose(); } }}>
     <header className="modal-heading"><h2>{title}</h2>{headerContent}<button className="button icon-button modal-close" aria-label={`关闭${title}`} onClick={onClose}><Icon name="close" size={17} />关闭</button></header>
     {children}
   </dialog>;
@@ -68,7 +71,7 @@ export function Preview({ share, entry, onClose, onEdit }: { share: string; entr
     }).catch(error => { if (!controller.signal.aborted) setContent({ error: error instanceof Error ? error.message : '预览失败' }); });
     return () => { controller.abort(); if (url) URL.revokeObjectURL(url); };
   }, [share, entry.path]);
-  return <Modal title={entry.name} wide onClose={onClose} headerContent={<div className="preview-actions">{content.text !== undefined && onEdit && <button className="button" onClick={onEdit}><Icon name="edit" size={17} />编辑文件</button>}<a className="button primary" href={apiURL('download', { share, path: entry.path })} download={entry.name}><Icon name="download" size={17} />下载文件</a></div>}>
+  return <Modal title={entry.name} wide fileDialog={{ kind: 'preview', content }} onClose={onClose} headerContent={<div className="preview-actions">{content.text !== undefined && onEdit && <button className="button" onClick={onEdit}><Icon name="edit" size={17} />编辑文件</button>}<a className="button primary" href={apiURL('download', { share, path: entry.path })} download={entry.name}><Icon name="download" size={17} />下载文件</a></div>}>
     <div className="preview-body">{content.error ? <div className="empty-state"><Icon name="file" size={48} /><h3>无法预览此文件</h3><p>{content.error}</p><p>支持常见图片以及不超过 1 MiB 的 UTF-8 文本；其他文件请下载查看。</p></div> : content.url ? <img className="preview-image" src={content.url} alt={entry.name} /> : content.text !== undefined ? isMarkdown(entry.name) ? <Markdown text={content.text} share={share} path={entry.path} /> : <pre className="preview-text">{content.text}</pre> : <div className="loading-state" role="status"><span className="spinner" />正在加载预览…</div>}</div>
     <footer className="modal-actions preview-footer"><span>{formatBytes(entry.size)} · {formatDate(entry.modified)}</span><span className="preview-resize-help">拖动右下角可调整宽度</span></footer>
   </Modal>;
