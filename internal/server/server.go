@@ -160,6 +160,7 @@ func New(c Config, static string) (*Server, error) {
  CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY,csrf TEXT NOT NULL,expires INTEGER NOT NULL);
  CREATE TABLE IF NOT EXISTS trash(id TEXT PRIMARY KEY,share TEXT NOT NULL,path TEXT NOT NULL,deleted_at TEXT NOT NULL,size INTEGER NOT NULL,is_dir INTEGER NOT NULL);
  CREATE TABLE IF NOT EXISTS tasks(id TEXT PRIMARY KEY,kind TEXT NOT NULL,status TEXT NOT NULL,completed INTEGER NOT NULL,total INTEGER NOT NULL,error TEXT NOT NULL);
+ CREATE TABLE IF NOT EXISTS task_operations(id TEXT PRIMARY KEY,body TEXT NOT NULL);
  UPDATE tasks SET status='error',error='服务重启，任务已中断；请检查源与目标后重试' WHERE status='running';
  DELETE FROM sessions WHERE expires < unixepoch();`)
 	if err != nil {
@@ -274,6 +275,7 @@ func (s *Server) routes(static string) {
 	s.api("GET /api/tasks", s.getTasks)
 	s.api("POST /api/tasks/clear", s.clearTasks)
 	s.api("POST /api/tasks/cancel", s.cancelTask)
+	s.shareAPI("POST /api/tasks/retry", s.retryTask)
 	s.api("GET /api/events", s.events)
 	s.shareAPI("GET /api/trash", s.listTrash)
 	s.shareAPI("POST /api/trash/restore", s.restoreTrash)

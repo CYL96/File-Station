@@ -227,3 +227,7 @@
 .task-statistics dd{margin:0;font-size:20px;font-weight:600;line-height:1.25;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
 .task-statistics .stat-done dd{color:#5ea988}.task-statistics .stat-running dd{color:#568edf}.task-statistics .stat-error dd{color:#cf7080}
 .task-drawer .task-list{min-height:0;overscroll-behavior:contain}
+.task-card-footer{flex-wrap:wrap;gap:6px 12px}
+.task-card-footer>span{min-width:0;overflow-wrap:anywhere}
+.task-card-footer button{flex-shrink:0;white-space:nowrap}
+.task-card-footer button:disabled{opacity:.5;cursor:wait;text-decoration:none}

@@ -17,6 +17,7 @@ type Item = Entry & { trashId?: string; deletedAt?: string };
 type View = { share: string; path: string; trash: boolean };
 type ModalState = { kind: 'mkdir' } | { kind: 'rename'; entry: Item } | { kind: 'destination'; operation: Operation } | { kind: 'delete'; items: Item[]; permanent: boolean } | { kind: 'preview'; entry: Item } | { kind: 'edit'; share: string; entry: Item } | { kind: 'help' } | { kind: 'shares' } | { kind: 'advanced' };
 type UploadTask = { id: string; name: string; size: number; loaded: number; status: 'queued' | 'running' | 'done' | 'error' | 'cancelled' | 'skipped'; error?: string; controller: AbortController };
+type UploadSource = { file: File; share: string; path: string; conflict: Conflict };
 type ConflictPrompt = { title: string; description: string; resolve: (policy: Conflict | null) => void };
 const taskLabels: Record<string, string> = { copy: '复制', move: '移动', trash: '移至回收站' };
 const statuses: Record<string, string> = { queued: '等待上传', running: '正在处理', done: '已完成', error: '失败', cancelled: '已取消', skipped: '已跳过' };
@@ -48,6 +49,7 @@ export default function App() {
   const [sidebar, setSidebar] = useState(false);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [uploads, setUploads] = useState<UploadTask[]>([]);
+  const [retryingTasks, setRetryingTasks] = useState<Set<string>>(new Set());
   const [clearingTasks, setClearingTasks] = useState(false);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
   const [clipboard, setClipboard] = useState<Operation | null>(null);
@@ -59,9 +61,11 @@ export default function App() {
   const fileInput = useRef<HTMLInputElement>(null);
   const filterInput = useRef<HTMLInputElement>(null);
   const anchor = useRef<string | null>(null);
-  const operations = useRef(new Map<string, Operation>());
+  const pendingRetries = useRef(new Set<string>());
   const previousTasks = useRef(new Map<string, Task['status']>());
   const uploadControllers = useRef(new Set<AbortController>());
+  const uploadSources = useRef(new Map<string, UploadSource>());
+  const enqueuedUploads = useRef(new Set<string>());
   const conflictQueue = useRef(Promise.resolve());
   const uploadQueue = useRef(Promise.resolve());
   const conflictRef = useRef<ConflictPrompt | null>(null);
@@ -86,9 +90,10 @@ export default function App() {
     setFileSettings(defaultFileSettings); setSort(defaultFileSettings.sort);
     setSizeSelection(null);
     setClearingTasks(false);
+    pendingRetries.current.clear(); setRetryingTasks(new Set());
     conflictRef.current?.resolve(null); conflictRef.current = null; setConflict(null);
     for (const controller of uploadControllers.current) controller.abort();
-    uploadControllers.current.clear(); operations.current.clear(); previousTasks.current.clear();
+    uploadControllers.current.clear(); uploadSources.current.clear(); enqueuedUploads.current.clear(); previousTasks.current.clear();
   }
   function acceptSession(value: Session) {
     clearHistory();
@@ -246,7 +251,7 @@ export default function App() {
       const clearedIds = new Set(taskIds);
       setTasks(current => current.filter(task => !clearedIds.has(task.id)));
       setUploads(current => current.filter(task => !uploadIds.has(task.id)));
-      for (const id of taskIds) { operations.current.delete(id); previousTasks.current.delete(id); }
+      for (const id of taskIds) previousTasks.current.delete(id);
       notify('已清除成功任务');
     } catch (error) {
       if (epoch === authEpoch.current) notify(error instanceof Error ? error.message : '清除失败', true);
@@ -347,6 +352,7 @@ export default function App() {
     while (epoch === authEpoch.current) {
       try { await action(policy); return epoch === authEpoch.current; }
       catch (error) {
+        if (epoch !== authEpoch.current) return false;
         if (!(error instanceof ApiError && error.status === 409)) throw error;
         const answer = await askConflict(title, error.message);
         if (!answer) return false;
@@ -359,8 +365,7 @@ export default function App() {
     const epoch = authEpoch.current;
     const result = await request<{ id: string }>('operation', operation);
     if (epoch !== authEpoch.current) return;
-    operations.current.set(result.id, operation);
-    setTasks(current => current.some(task => task.id === result.id) ? current : [{ id: result.id, kind: operation.kind, status: 'running', completed: 0, total: operation.paths.length }, ...current]);
+    setTasks(current => current.some(task => task.id === result.id) ? current : [{ id: result.id, kind: operation.kind, status: 'running', completed: 0, total: operation.paths.length, canRetry: false }, ...current]);
     if (!previousTasks.current.has(result.id)) previousTasks.current.set(result.id, 'running');
     setDrawer(true);
   }
@@ -369,17 +374,32 @@ export default function App() {
     if (success) notify('任务已加入任务中心');
   }
   async function retryTask(task: Task) {
-    const original = operations.current.get(task.id);
-    if (!original) return;
-    const operation = { ...original, paths: original.paths.slice(task.completed) };
-    if (operation.paths.length === 0) return;
+    if (task.status !== 'error' || !task.canRetry || pendingRetries.current.has(task.id)) return;
+    const epoch = authEpoch.current;
+    pendingRetries.current.add(task.id);
+    setRetryingTasks(current => new Set(current).add(task.id));
+    const submit = async (policy?: Conflict) => {
+      const result = await request<{ id: string }>('tasks/retry', { id: task.id, conflict: policy });
+      if (epoch !== authEpoch.current) return;
+      setTasks(current => current.some(item => item.id === result.id) ? current : [{ id: result.id, kind: task.kind, status: 'running', completed: 0, total: task.total - task.completed, canRetry: false }, ...current]);
+      if (!previousTasks.current.has(result.id)) previousTasks.current.set(result.id, 'running');
+      setDrawer(true);
+    };
     try {
-      if (operation.kind === 'trash') await runOperation(operation);
+      if (task.kind === 'trash') await submit();
       else {
         const policy = await askConflict('选择重试时的同名文件处理方式', task.error ?? '将仅重试未完成的项目；已完成的项目不会撤销或重复执行。');
-        if (policy) await withConflict(choice => runOperation({ ...operation, conflict: choice === 'error' ? policy : choice }), '目标位置仍存在冲突');
+        if (!policy || epoch !== authEpoch.current) return;
+        await submit(policy);
       }
-    } catch (error) { notify(error instanceof Error ? error.message : '重试失败', true); }
+    } catch (error) {
+      if (epoch === authEpoch.current) notify(error instanceof Error ? error.message : '重试失败', true);
+    } finally {
+      if (epoch === authEpoch.current) {
+        pendingRetries.current.delete(task.id);
+        setRetryingTasks(current => { const next = new Set(current); next.delete(task.id); return next; });
+      }
+    }
   }
   function destination(kind: 'copy' | 'move') {
     if (!picked.length || view.trash || (kind === 'move' && readOnly)) return;
@@ -406,42 +426,73 @@ export default function App() {
     } catch (error) { notify(error instanceof Error ? error.message : '恢复失败', true); setRefresh(value => value + 1); }
     finally { setActionBusy(false); }
   }
-  function queueUploads(files: File[]) {
-    if (readOnly || view.trash || !files.length) return;
-    const target = { ...view };
+  function enqueueUploads(jobs: UploadTask[]) {
     const epoch = authEpoch.current;
-    const jobs = files.map(file => ({ file, task: { id: `upload-${++uploadSequence}`, name: file.name, size: file.size, loaded: 0, status: 'queued' as const, controller: new AbortController() } }));
-    for (const job of jobs) uploadControllers.current.add(job.task.controller);
-    setUploads(current => [...jobs.map(job => job.task), ...current]); setDrawer(true);
-    const update = (id: string, patch: Partial<UploadTask>) => setUploads(current => current.map(task => task.id === id ? { ...task, ...patch } : task));
+    for (const task of jobs) {
+      enqueuedUploads.current.add(task.id);
+      uploadControllers.current.add(task.controller);
+    }
+    const update = (id: string, patch: Partial<UploadTask>) => {
+      if (epoch === authEpoch.current) setUploads(current => current.map(task => task.id === id ? { ...task, ...patch } : task));
+    };
     uploadQueue.current = uploadQueue.current.then(async () => {
-      for (const { file, task } of jobs) {
+      for (const task of jobs) {
         if (epoch !== authEpoch.current) break;
+        const source = uploadSources.current.get(task.id);
         const signal = task.controller.signal;
         try {
-          if (signal.aborted) throw new DOMException('上传已取消', 'AbortError');
+          if (!source || signal.aborted) throw new DOMException('上传已取消', 'AbortError');
           update(task.id, { status: 'running' });
-          const transfer = (policy: Conflict) => upload(file, target.share, target.path, policy, loaded => update(task.id, { loaded }), signal);
           let result: { skipped?: boolean };
-          let policy: Conflict = 'error';
           while (true) {
-            try { result = await transfer(policy); break; }
+            try {
+              result = await upload(source.file, source.share, source.path, source.conflict, loaded => {
+                if (!signal.aborted) update(task.id, { loaded });
+              }, signal);
+              break;
+            }
             catch (error) {
+              if (epoch !== authEpoch.current || signal.aborted) throw new DOMException('上传已取消', 'AbortError');
               if (!(error instanceof ApiError && error.status === 409)) throw error;
-              const answer = await askConflict(`上传「${file.name}」时发生冲突`, error.message, signal);
+              const answer = await askConflict(`上传「${task.name}」时发生冲突`, error.message, signal);
               if (!answer) throw new DOMException('上传已取消', 'AbortError');
-              policy = answer; update(task.id, { loaded: 0 });
+              source.conflict = answer; update(task.id, { loaded: 0 });
             }
           }
-          if (epoch === authEpoch.current) update(task.id, { status: result.skipped ? 'skipped' : 'done', loaded: file.size });
+          uploadSources.current.delete(task.id);
+          update(task.id, signal.aborted ? { status: 'cancelled' } : { status: result.skipped ? 'skipped' : 'done', loaded: task.size });
         } catch (error) {
-          if (epoch === authEpoch.current) update(task.id, { status: signal.aborted || (error instanceof DOMException && error.name === 'AbortError') ? 'cancelled' : 'error', error: error instanceof Error ? error.message : '上传失败' });
+          const cancelled = signal.aborted || (error instanceof DOMException && error.name === 'AbortError');
+          if (cancelled) uploadSources.current.delete(task.id);
+          update(task.id, { status: cancelled ? 'cancelled' : 'error', error: cancelled ? undefined : error instanceof Error ? error.message : '上传失败' });
         } finally {
           uploadControllers.current.delete(task.controller);
-          if (epoch === authEpoch.current && viewRef.current.share === target.share && viewRef.current.path === target.path) setRefresh(value => value + 1);
+          enqueuedUploads.current.delete(task.id);
+          if (epoch === authEpoch.current && source && viewRef.current.share === source.share && viewRef.current.path === source.path) setRefresh(value => value + 1);
         }
       }
     });
+  }
+  function queueUploads(files: File[]) {
+    if (readOnly || view.trash || !files.length) return;
+    const jobs = files.map(file => {
+      const task: UploadTask = { id: `upload-${++uploadSequence}`, name: file.name, size: file.size, loaded: 0, status: 'queued', controller: new AbortController() };
+      uploadSources.current.set(task.id, { file, share: view.share, path: view.path, conflict: 'error' });
+      return task;
+    });
+    setUploads(current => [...jobs, ...current]); setDrawer(true);
+    enqueueUploads(jobs);
+  }
+  function retryUpload(task: UploadTask) {
+    if (task.status !== 'error' || !uploadSources.current.has(task.id) || enqueuedUploads.current.has(task.id)) return;
+    const next: UploadTask = { ...task, status: 'queued', loaded: 0, error: undefined, controller: new AbortController() };
+    setUploads(current => current.map(item => item.id === task.id ? next : item));
+    enqueueUploads([next]);
+  }
+  function cancelUpload(task: UploadTask) {
+    task.controller.abort();
+    uploadSources.current.delete(task.id);
+    setUploads(current => current.map(item => item.id === task.id ? { ...item, status: 'cancelled', error: undefined } : item));
   }
   async function paste() {
     if (!clipboard || readOnly || view.trash) return;
@@ -524,8 +575,8 @@ export default function App() {
         </dl>
         <div className="task-list">
           {uploads.length === 0 && tasks.length === 0 && <div className="empty-state"><Icon name="tasks" size={42} /><h3>还没有任务</h3><p>上传、复制、移动和删除任务会显示在这里。</p></div>}
-          {uploads.map(task => <article key={task.id} className="task-card"><div className="task-card-heading"><span className="task-icon"><Icon name="upload" size={19} /></span><div><h3 title={task.name}>{task.name}</h3><p>上传 · {formatBytes(task.size)}</p></div><span className={`task-state state-${task.status}`}>{statuses[task.status]}</span></div><progress aria-label={`${task.name} 上传进度`} max={Math.max(task.size, 1)} value={task.status === 'done' ? Math.max(task.size, 1) : task.loaded} /><div className="task-card-footer"><span>{task.status === 'running' && task.loaded >= task.size ? '服务器正在保存…' : `${formatBytes(task.loaded)} / ${formatBytes(task.size)}`}</span>{(task.status === 'running' || task.status === 'queued') && <button onClick={() => { task.controller.abort(); setUploads(current => current.map(item => item.id === task.id ? { ...item, status: 'cancelled' } : item)); }} aria-label={`取消上传 ${task.name}`}>取消</button>}</div>{task.error && task.status === 'error' && <p className="task-error">{task.error}</p>}</article>)}
-          {tasks.map(task => <article key={task.id} className="task-card"><div className="task-card-heading"><span className="task-icon"><Icon name={task.kind === 'copy' ? 'copy' : task.kind === 'move' ? 'move' : 'trash'} size={19} /></span><div><h3>{taskLabels[task.kind] ?? task.kind}</h3><p className="task-id">任务 {task.id.slice(0, 8)}</p></div><span className={`task-state state-${task.status}`}>{statuses[task.status]}</span></div><progress aria-label={`${taskLabels[task.kind] ?? task.kind}任务进度`} max={Math.max(task.total, task.completed, 1)} value={task.status === 'done' ? Math.max(task.total, task.completed, 1) : task.completed} /><div className="task-card-footer"><span>{task.completed} / {task.total} 个项目</span>{task.status === 'running' && <button aria-label={`取消任务 ${task.id}`} onClick={async () => { try { await request('tasks/cancel', { id: task.id }); notify('已发送任务取消请求'); } catch (error) { notify(error instanceof Error ? error.message : '取消失败', true); } }}>取消任务</button>}{task.status === 'error' && operations.current.has(task.id) && <button onClick={() => { void retryTask(task); }}>重新处理</button>}</div>{task.error && <p className="task-error">{task.error}</p>}</article>)}
+          {uploads.map(task => <article key={task.id} className="task-card"><div className="task-card-heading"><span className="task-icon"><Icon name="upload" size={19} /></span><div><h3 title={task.name}>{task.name}</h3><p>上传 · {formatBytes(task.size)}</p></div><span className={`task-state state-${task.status}`}>{statuses[task.status]}</span></div><progress aria-label={`${task.name} 上传进度`} max={Math.max(task.size, 1)} value={task.status === 'done' ? Math.max(task.size, 1) : task.loaded} /><div className="task-card-footer"><span>{task.status === 'running' && task.loaded >= task.size ? '服务器正在保存…' : `${formatBytes(task.loaded)} / ${formatBytes(task.size)}`}</span>{(task.status === 'running' || task.status === 'queued') && <button onClick={() => cancelUpload(task)} aria-label={`取消上传 ${task.name}`}>取消</button>}{task.status === 'error' && uploadSources.current.has(task.id) && <button disabled={enqueuedUploads.current.has(task.id)} onClick={() => retryUpload(task)} aria-label={`重试上传 ${task.name}`}>重试</button>}</div>{task.error && task.status === 'error' && <p className="task-error">{task.error}</p>}</article>)}
+          {tasks.map(task => <article key={task.id} className="task-card"><div className="task-card-heading"><span className="task-icon"><Icon name={task.kind === 'copy' ? 'copy' : task.kind === 'move' ? 'move' : 'trash'} size={19} /></span><div><h3>{taskLabels[task.kind] ?? task.kind}</h3><p className="task-id">任务 {task.id.slice(0, 8)}</p></div><span className={`task-state state-${task.status}`}>{statuses[task.status]}</span></div><progress aria-label={`${taskLabels[task.kind] ?? task.kind}任务进度`} max={Math.max(task.total, task.completed, 1)} value={task.status === 'done' ? Math.max(task.total, task.completed, 1) : task.completed} /><div className="task-card-footer"><span>{task.completed} / {task.total} 个项目</span>{task.status === 'running' && <button aria-label={`取消任务 ${task.id}`} onClick={async () => { try { await request('tasks/cancel', { id: task.id }); notify('已发送任务取消请求'); } catch (error) { notify(error instanceof Error ? error.message : '取消失败', true); } }}>取消任务</button>}{task.status === 'error' && task.canRetry && <button disabled={retryingTasks.has(task.id)} onClick={() => { void retryTask(task); }} aria-label={`重试任务 ${task.id}`}>重试</button>}</div>{task.error && <p className="task-error">{task.error}</p>}</article>)}
         </div>
       </aside>
     </>}

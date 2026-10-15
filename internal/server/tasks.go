@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -21,6 +22,7 @@ type Task struct {
 	Completed        int    `json:"completed"`
 	Total            int    `json:"total"`
 	Error            string `json:"error,omitempty"`
+	CanRetry         bool   `json:"canRetry"`
 	cancel           context.CancelFunc
 	sourceShare      string
 	destinationShare string
@@ -43,18 +45,67 @@ func (s *Server) operation(w http.ResponseWriter, r *http.Request) error {
 	if err := decode(w, r, &b); err != nil {
 		return err
 	}
+	id, err := s.startOperation(b)
+	if err != nil {
+		return err
+	}
+	jsonResponse(w, map[string]string{"id": id})
+	return nil
+}
+
+func (s *Server) retryTask(w http.ResponseWriter, r *http.Request) error {
+	var request struct {
+		ID       string  `json:"id"`
+		Conflict *string `json:"conflict"`
+	}
+	if err := decode(w, r, &request); err != nil {
+		return err
+	}
+	var status string
+	var completed int
+	var body sql.NullString
+	err := s.db.QueryRow("SELECT tasks.status,tasks.completed,task_operations.body FROM tasks LEFT JOIN task_operations ON task_operations.id=tasks.id WHERE tasks.id=?", request.ID).Scan(&status, &completed, &body)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fail(404, "任务不存在")
+	}
+	if err != nil {
+		return err
+	}
+	if status != "error" || !body.Valid {
+		return fail(409, "此任务不能重试")
+	}
+	var b operationBody
+	if err = json.Unmarshal([]byte(body.String), &b); err != nil {
+		return err
+	}
+	if completed < 0 || completed >= len(b.Paths) {
+		return fail(409, "此任务没有可重试的项目")
+	}
+	b.Paths = b.Paths[completed:]
+	if request.Conflict != nil {
+		b.Conflict = *request.Conflict
+	}
+	id, err := s.startOperation(b)
+	if err != nil {
+		return err
+	}
+	jsonResponse(w, map[string]string{"id": id})
+	return nil
+}
+
+func (s *Server) startOperation(b operationBody) (string, error) {
 	if b.Kind != "copy" && b.Kind != "move" && b.Kind != "trash" {
-		return fail(400, "操作无效")
+		return "", fail(400, "操作无效")
 	}
 	if len(b.Paths) == 0 || len(b.Paths) > 1000 {
-		return fail(400, "请选择 1 到 1000 项")
+		return "", fail(400, "请选择 1 到 1000 项")
 	}
 	if err := conflictPolicy(b.Conflict); err != nil {
-		return err
+		return "", err
 	}
 	src, err := s.share(b.Share, b.Kind != "copy")
 	if err != nil {
-		return err
+		return "", err
 	}
 	var dst *Share
 	destination := "."
@@ -64,62 +115,79 @@ func (s *Server) operation(w http.ResponseWriter, r *http.Request) error {
 		}
 		dst, err = s.share(b.DestinationShare, true)
 		if err != nil {
-			return err
+			return "", err
 		}
 		destination, err = safePath(b.Destination)
 		if err != nil {
-			return err
+			return "", err
 		}
 		if err = noLinks(dst.root, destination); err != nil {
-			return err
+			return "", err
 		}
 		info, err := dst.root.Stat(destination)
 		if err != nil {
-			return err
+			return "", err
 		}
 		if !info.IsDir() {
-			return fail(400, "目标不是文件夹")
+			return "", fail(400, "目标不是文件夹")
 		}
 	}
 	seen := map[string]bool{}
 	for i, p := range b.Paths {
 		p, err = safePath(p)
 		if err != nil {
-			return err
+			return "", err
 		}
 		if p == "." {
-			return fail(403, "不能操作共享根目录")
+			return "", fail(403, "不能操作共享根目录")
 		}
 		if seen[p] {
-			return fail(400, "不能重复选择文件")
+			return "", fail(400, "不能重复选择文件")
 		}
 		seen[p] = true
 		b.Paths[i] = p
 		if err = noLinks(src.root, path.Dir(p)); err != nil {
-			return err
+			return "", err
 		}
 		if _, err = src.root.Lstat(p); err != nil {
-			return err
+			return "", err
 		}
 		if dst == src {
 			target := path.Join(destination, path.Base(p))
 			if target == p || strings.HasPrefix(destination, p+"/") || destination == p {
-				return fail(400, "不能复制或移动到自身或子目录")
+				return "", fail(400, "不能复制或移动到自身或子目录")
 			}
 		}
 	}
 	for p := range seen {
 		for parent := path.Dir(p); parent != "."; parent = path.Dir(parent) {
 			if seen[parent] {
-				return fail(400, "不能同时选择父目录和子项")
+				return "", fail(400, "不能同时选择父目录和子项")
 			}
 		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	t := &Task{ID: token(), Kind: b.Kind, Status: "running", Total: len(b.Paths), cancel: cancel, sourceShare: b.Share, destinationShare: b.DestinationShare}
-	if err = s.saveTask(t); err != nil {
+	body, err := json.Marshal(b)
+	if err != nil {
 		cancel()
-		return err
+		return "", err
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		cancel()
+		return "", err
+	}
+	defer tx.Rollback()
+	if _, err = tx.Exec("INSERT INTO tasks(id,kind,status,completed,total,error) VALUES(?,?,?,?,?,?)", t.ID, t.Kind, t.Status, t.Completed, t.Total, t.Error); err == nil {
+		_, err = tx.Exec("INSERT INTO task_operations(id,body) VALUES(?,?)", t.ID, string(body))
+	}
+	if err == nil {
+		err = tx.Commit()
+	}
+	if err != nil {
+		cancel()
+		return "", err
 	}
 	s.tasksMu.Lock()
 	s.tasks[t.ID] = t
@@ -191,11 +259,10 @@ func (s *Server) operation(w http.ResponseWriter, r *http.Request) error {
 		delete(s.tasks, t.ID)
 		s.tasksMu.Unlock()
 	}()
-	jsonResponse(w, map[string]string{"id": t.ID})
-	return nil
+	return t.ID, nil
 }
 func (s *Server) allTasks() ([]Task, error) {
-	rows, err := s.db.Query("SELECT id,kind,status,completed,total,error FROM tasks ORDER BY rowid DESC LIMIT 100")
+	rows, err := s.db.Query("SELECT tasks.id,tasks.kind,tasks.status,tasks.completed,tasks.total,tasks.error,(tasks.status='error' AND tasks.completed>=0 AND tasks.completed<tasks.total AND task_operations.id IS NOT NULL) FROM tasks LEFT JOIN task_operations ON task_operations.id=tasks.id ORDER BY tasks.rowid DESC LIMIT 100")
 	if err != nil {
 		return nil, err
 	}
@@ -203,7 +270,7 @@ func (s *Server) allTasks() ([]Task, error) {
 	result := []Task{}
 	for rows.Next() {
 		var t Task
-		if err = rows.Scan(&t.ID, &t.Kind, &t.Status, &t.Completed, &t.Total, &t.Error); err != nil {
+		if err = rows.Scan(&t.ID, &t.Kind, &t.Status, &t.Completed, &t.Total, &t.Error, &t.CanRetry); err != nil {
 			return nil, err
 		}
 		result = append(result, t)
@@ -236,7 +303,15 @@ func (s *Server) clearTasks(w http.ResponseWriter, r *http.Request) error {
 			return err
 		}
 		defer stmt.Close()
+		cleanup, err := tx.Prepare("DELETE FROM task_operations WHERE id IN (SELECT id FROM tasks WHERE id=? AND status='done')")
+		if err != nil {
+			return err
+		}
+		defer cleanup.Close()
 		for _, id := range b.IDs {
+			if _, err = cleanup.Exec(id); err != nil {
+				return err
+			}
 			if _, err = stmt.Exec(id); err != nil {
 				return err
 			}
