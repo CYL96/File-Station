@@ -28,7 +28,7 @@ func TestFileLifecycleAndBoundaries(t *testing.T) {
 	if err := os.WriteFile(password, []byte("correct-password-123"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	app, err := New(Config{IP: "127.0.0.1", Port: 8080, StateDir: filepath.Join(base, "state"), PasswordFile: password, AllowedRoots: []AllowedRoot{{Path: share}, {Path: other}, {Path: readOnly, ReadOnly: true}}, Shares: []Share{{ID: "files", Name: "Files", Path: share}, {ID: "other", Name: "Other", Path: other}, {ID: "readonly", Name: "Read only", Path: readOnly, ReadOnly: true}}}, base)
+	app, err := New(Config{IP: "127.0.0.1", Port: 8080, StateDir: filepath.Join(base, "state"), PasswordFile: password, Shares: []Share{{ID: "files", Name: "Files", Path: share}, {ID: "other", Name: "Other", Path: other}, {ID: "readonly", Name: "Read only", Path: readOnly, ReadOnly: true}}}, base)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,7 +177,7 @@ func TestClearTasksOnlyDeletesRequestedSuccessfulTasks(t *testing.T) {
 	if err := os.Mkdir(files, 0750); err != nil {
 		t.Fatal(err)
 	}
-	app, err := New(Config{IP: "127.0.0.1", Port: 8080, StateDir: filepath.Join(base, "state"), Password: "correct-password-123", AllowedRoots: []AllowedRoot{{Path: files}}, Shares: []Share{{ID: "files", Name: "Files", Path: files}}}, base)
+	app, err := New(Config{IP: "127.0.0.1", Port: 8080, StateDir: filepath.Join(base, "state"), Password: "correct-password-123", Shares: []Share{{ID: "files", Name: "Files", Path: files}}}, base)
 	if err != nil {
 		t.Fatal(err)
 	}

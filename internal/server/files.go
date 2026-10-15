@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"path"
@@ -101,12 +102,46 @@ func (s *Server) mkdir(w http.ResponseWriter, r *http.Request) error {
 	if err = noLinks(sh.root, p); err != nil {
 		return err
 	}
-	if err = sh.root.Mkdir(path.Join(p, b.Name), 0750); err != nil {
+	name := path.Join(p, b.Name)
+	if err = sh.root.Mkdir(name, 0700); err != nil {
+		return err
+	}
+	if err = sh.root.Chmod(name, s.dirMode()); err != nil {
+		_ = sh.root.Remove(name)
 		return err
 	}
 	jsonResponse(w, map[string]bool{"ok": true})
 	return nil
 }
+
+// mkdirParents leaves new restore ancestors private and traversable until the
+// caller has restored the inode, then finalizes them in reverse order.
+func (s *Server) mkdirParents(root *os.Root, name string) ([]string, error) {
+	current := "."
+	var created []string
+	for _, component := range strings.Split(name, "/") {
+		current = path.Join(current, component)
+		if err := noLinks(root, current); err != nil && !os.IsNotExist(err) {
+			return created, err
+		}
+		if err := root.Mkdir(current, 0700); err != nil {
+			if !os.IsExist(err) {
+				return created, err
+			}
+			info, err := root.Lstat(current)
+			if err != nil {
+				return created, err
+			}
+			if !info.IsDir() {
+				return created, fail(409, "恢复路径的父级不是目录")
+			}
+			continue
+		}
+		created = append(created, current)
+	}
+	return created, nil
+}
+
 func conflictPolicy(p string) error {
 	switch p {
 	case "", "error", "skip", "replace", "keep":
@@ -326,7 +361,7 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	temp := path.Join(p, ".webui-upload-"+token())
-	f, err := sh.root.OpenFile(temp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0640)
+	f, err := sh.root.OpenFile(temp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
 		return err
 	}
@@ -352,6 +387,9 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	if !skip {
+		if err = sh.root.Chmod(temp, s.fileMode()); err != nil {
+			return err
+		}
 		err = renameBetween(sh.root, temp, sh.root, target, policy == "replace")
 	}
 	if err != nil {
@@ -372,7 +410,7 @@ func (c contextReader) Read(p []byte) (int, error) {
 	}
 	return c.r.Read(p)
 }
-func copyTree(ctx context.Context, src *os.Root, from string, dst *os.Root, to string) error {
+func (s *Server) copyTree(ctx context.Context, src *os.Root, from string, dst *os.Root, to string, directoryMode os.FileMode) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -384,7 +422,7 @@ func copyTree(ctx context.Context, src *os.Root, from string, dst *os.Root, to s
 		return fail(403, "不能复制符号链接")
 	}
 	if info.IsDir() {
-		if err = dst.Mkdir(to, 0750); err != nil {
+		if err = dst.Mkdir(to, 0700); err != nil {
 			return err
 		}
 		dir, err := src.OpenFile(from, os.O_RDONLY|unix.O_DIRECTORY, 0)
@@ -398,12 +436,12 @@ func copyTree(ctx context.Context, src *os.Root, from string, dst *os.Root, to s
 				if strings.HasPrefix(child.Name(), ".webui-") {
 					continue
 				}
-				if err = copyTree(ctx, src, path.Join(from, child.Name()), dst, path.Join(to, child.Name())); err != nil {
+				if err = s.copyTree(ctx, src, path.Join(from, child.Name()), dst, path.Join(to, child.Name()), s.dirMode()); err != nil {
 					return err
 				}
 			}
 			if e == io.EOF {
-				return nil
+				return dst.Chmod(to, directoryMode)
 			}
 			if e != nil {
 				return e
@@ -418,7 +456,7 @@ func copyTree(ctx context.Context, src *os.Root, from string, dst *os.Root, to s
 		return err
 	}
 	defer in.Close()
-	out, err := dst.OpenFile(to, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0640)
+	out, err := dst.OpenFile(to, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if err != nil {
 		return err
 	}
@@ -426,20 +464,63 @@ func copyTree(ctx context.Context, src *os.Root, from string, dst *os.Root, to s
 	if err == nil {
 		err = out.Sync()
 	}
+	if err == nil {
+		err = out.Chmod(s.fileMode())
+	}
 	closeErr := out.Close()
 	if err != nil {
 		return err
 	}
 	return closeErr
 }
-func publishCopy(ctx context.Context, src *os.Root, from string, dst *os.Root, to, policy string) error {
-	temp := path.Join(path.Dir(to), ".webui-upload-"+token())
-	defer dst.RemoveAll(temp)
-	if err := copyTree(ctx, src, from, dst, temp); err != nil {
+func (s *Server) publishCopy(ctx context.Context, src *os.Root, from string, dst *os.Root, to, policy string) error {
+	// Keep completed children behind a private directory even after they
+	// receive their final, potentially public permissions.
+	stage := path.Join(path.Dir(to), ".webui-upload-"+token())
+	if err := dst.Mkdir(stage, 0700); err != nil {
+		return err
+	}
+	defer func() {
+		// A valid mask may remove owner access. Restore traversal only inside
+		// our unpublished stage so cancellation can always remove its subtree.
+		_ = fs.WalkDir(dst.FS(), stage, func(p string, entry fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if entry.IsDir() {
+				return dst.Chmod(p, 0700)
+			}
+			return nil
+		})
+		_ = dst.RemoveAll(stage)
+	}()
+	payload := path.Join(stage, "payload")
+	if err := s.copyTree(ctx, src, from, dst, payload, 0700); err != nil {
 		return err
 	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return renameBetween(dst, temp, dst, to, policy == "replace")
+	info, err := dst.Lstat(payload)
+	if err != nil {
+		return err
+	}
+	var directory *os.File
+	if info.IsDir() {
+		// Moving a directory between parents requires write access to that
+		// directory on Linux. Keep its private mode through rename, then use
+		// the held descriptor to finalize even a mask that removes all access.
+		directory, err = dst.OpenFile(payload, os.O_RDONLY|unix.O_DIRECTORY, 0)
+		if err != nil {
+			return err
+		}
+		defer directory.Close()
+	}
+	if err = renameBetween(dst, payload, dst, to, policy == "replace"); err != nil {
+		return err
+	}
+	if directory != nil {
+		return directory.Chmod(s.dirMode())
+	}
+	return nil
 }

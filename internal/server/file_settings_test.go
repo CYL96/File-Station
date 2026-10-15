@@ -34,7 +34,7 @@ func newFileSettingsFixture(t *testing.T) *fileSettingsFixture {
 	fixture := &fileSettingsFixture{
 		t:      t,
 		static: base,
-		config: Config{IP: "127.0.0.1", Port: 8080, Password: "123123", StateDir: filepath.Join(base, "state"), AllowedRoots: []AllowedRoot{{Path: t.TempDir()}}},
+		config: Config{IP: "127.0.0.1", Port: 8080, Password: "123123", StateDir: filepath.Join(base, "state")},
 	}
 	t.Cleanup(fixture.stop)
 	fixture.start()

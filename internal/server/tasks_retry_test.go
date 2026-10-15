@@ -29,7 +29,7 @@ func newTaskRetryFixture(t *testing.T) *taskRetryFixture {
 	if err := os.MkdirAll(filepath.Join(files, "target"), 0750); err != nil {
 		t.Fatal(err)
 	}
-	f := &taskRetryFixture{t: t, base: base, files: files, config: Config{IP: "127.0.0.1", Port: 8080, StateDir: filepath.Join(base, "state"), Password: "correct-password-123", AllowedRoots: []AllowedRoot{{Path: files}}, Shares: []Share{{ID: "files", Name: "Files", Path: files}}}}
+	f := &taskRetryFixture{t: t, base: base, files: files, config: Config{IP: "127.0.0.1", Port: 8080, StateDir: filepath.Join(base, "state"), Password: "correct-password-123", Shares: []Share{{ID: "files", Name: "Files", Path: files}}}}
 	f.open()
 	t.Cleanup(func() { f.app.Close() })
 	return f

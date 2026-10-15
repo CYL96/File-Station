@@ -2,8 +2,8 @@
 set -euo pipefail
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
-service='nixos-file-station.service'
-out_link="$HOME/.local/state/nixos-file-station/current"
+service='file-station.service'
+out_link="$HOME/.local/state/file-station/current"
 
 # 更新已有用户服务；配置、密码和持久状态保持不变。
 systemctl --user cat "$service" > /dev/null

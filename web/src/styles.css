@@ -95,7 +95,7 @@
 .modal:has(>.settings-directory-picker){height:min(720px,calc(100dvh - 50px));display:flex;flex-direction:column;overflow:hidden}
 .modal:has(>.settings-directory-picker)>.modal-heading,.modal:has(>.settings-directory-picker)>.modal-actions{flex-shrink:0}
 .settings-directory-picker{flex:1;min-height:0;display:flex;flex-direction:column}
-.settings-directory-picker>.field-label,.settings-directory-picker>.text-input,.settings-picker-location{flex-shrink:0}
+.settings-directory-picker>.field-label,.settings-directory-picker>.share-path-input,.settings-directory-picker>.field-help,.settings-directory-picker>.form-error,.settings-picker-location{flex-shrink:0}
 .settings-picker-location{display:flex;align-items:center;gap:4px;margin:9px 0}
 .settings-picker-location code{flex:1;min-width:0;color:#7891ad;font-family:"SFMono-Regular",Consolas,"Liberation Mono",monospace;font-size:11px;line-height:1.7;overflow-wrap:anywhere}
 .settings-directory-picker .directory-picker{flex:1;min-height:0;height:auto;overscroll-behavior:contain}
@@ -120,7 +120,8 @@
 }
 .file-table{min-width:var(--file-min-width);width:100%}
 .grid-table{min-width:0}
-.grid-table .table-header{min-width:var(--file-min-width)}
+.grid-table .table-header{min-width:0;grid-template-columns:36px minmax(0,1fr)}
+.grid-sort-cell{display:flex;align-items:center;min-width:0;padding-right:12px}
 .advanced-settings-entry{padding-left:9px;padding-right:9px;white-space:nowrap}
 .advanced-settings-body fieldset{border:0;padding:0;margin:0;min-width:0}
 .advanced-settings-body h3{font-size:13px;margin:20px 0 8px}
@@ -230,24 +231,12 @@
 .task-card-footer button{flex-shrink:0;white-space:nowrap}
 .task-card-footer button:disabled{opacity:.5;cursor:wait;text-decoration:none}
 
-/* Grid-only sorting controls leave the list toolbar layout unchanged. */
-.grid-list-tools {
-  flex-wrap: wrap;
-  min-width: 0;
-}
-.grid-list-tools .filter-field {
-  flex: 1 1 150px;
-  min-width: 0;
-}
-.grid-list-tools .filter-field input {
-  width: 100%;
-  min-width: 0;
-}
-.grid-list-tools .grid-sort-button {
+.table-header .grid-sort-button {
   flex-shrink: 0;
-  padding-right: 10px;
-  padding-left: 10px;
+  padding: 5px 10px;
   gap: 6px;
+  color: #53657b;
+  font-size: 12px;
 }
 .grid-sort-button[aria-expanded=true] {
   background: #edf5ff;
@@ -289,9 +278,4 @@
 }
 .grid-sort-back {
   transform: rotate(180deg);
-}
-@media (max-width: 480px) {
-  .grid-list-tools .filter-field {
-    flex-basis: 100%;
-  }
 }

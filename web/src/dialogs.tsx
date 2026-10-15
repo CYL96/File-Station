@@ -7,7 +7,7 @@ export function Login({ onLogin, initialError }: { onLogin: (session: Session) =
   const [password, setPassword] = useState('');
   const [error, setError] = useState(initialError);
   const [busy, setBusy] = useState(false);
-  return <main className="login-screen"><div className="login-decoration" aria-hidden="true"><div className="orbit orbit-one" /><div className="orbit orbit-two" /></div><section className="login-card"><div className="brand-mark"><Icon name="folder" size={36} /></div><h1>NixOS File Station</h1><form onSubmit={async event => {
+  return <main className="login-screen"><div className="login-decoration" aria-hidden="true"><div className="orbit orbit-one" /><div className="orbit orbit-two" /></div><section className="login-card"><div className="brand-mark"><Icon name="folder" size={36} /></div><h1>File Station</h1><form onSubmit={async event => {
     event.preventDefault(); setBusy(true); setError('');
     try { await request('login', { password }); const session = await request<Session>('session'); onLogin(session); }
     catch (cause) { setError(cause instanceof ApiError ? cause.message : '无法连接服务器，请检查网络后重试'); }

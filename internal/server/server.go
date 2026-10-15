@@ -34,14 +34,15 @@ type Share struct {
 	err      string
 }
 type Config struct {
-	IP            string        `json:"ip"`
-	Port          int           `json:"port"`
-	StateDir      string        `json:"stateDir"`
-	Password      string        `json:"password,omitempty"`
-	PasswordFile  string        `json:"passwordFile,omitempty"`
-	SecureCookies bool          `json:"secureCookies"`
-	AllowedRoots  []AllowedRoot `json:"allowedRoots"`
-	Shares        []Share       `json:"shares"`
+	IP                 string  `json:"ip"`
+	Port               int     `json:"port"`
+	StateDir           string  `json:"stateDir"`
+	Umask              string  `json:"umask"`
+	Password           string  `json:"password,omitempty"`
+	PasswordFile       string  `json:"passwordFile,omitempty"`
+	PasswordSourceFile string  `json:"passwordSourceFile,omitempty"`
+	SecureCookies      bool    `json:"secureCookies"`
+	Shares             []Share `json:"shares"`
 }
 
 func (c Config) Address() string {
@@ -49,20 +50,21 @@ func (c Config) Address() string {
 }
 
 type Server struct {
-	config       Config
-	db           *sql.DB
-	password     [32]byte
-	mux          *http.ServeMux
-	mutation     sync.Mutex
-	sharesMu     sync.RWMutex
-	shares       []Share
-	allowedRoots []AllowedRoot
-	tasksMu      sync.Mutex
-	tasks        map[string]*Task
-	workers      sync.WaitGroup
-	loginMu      sync.Mutex
-	failures     int
-	blockedUntil time.Time
+	config             Config
+	umask              os.FileMode
+	passwordSourceReal string
+	db                 *sql.DB
+	password           [32]byte
+	mux                *http.ServeMux
+	mutation           sync.Mutex
+	sharesMu           sync.RWMutex
+	shares             []Share
+	tasksMu            sync.Mutex
+	tasks              map[string]*Task
+	workers            sync.WaitGroup
+	loginMu            sync.Mutex
+	failures           int
+	blockedUntil       time.Time
 }
 type apiError struct {
 	status  int
@@ -112,23 +114,51 @@ func decode(w http.ResponseWriter, r *http.Request, v any) error {
 }
 
 func New(c Config, static string) (*Server, error) {
+	if c.Umask == "" {
+		c.Umask = "0022"
+	}
+	if len(c.Umask) != 3 && len(c.Umask) != 4 {
+		return nil, fmt.Errorf("umask must contain 3 or 4 octal digits between 0000 and 0777")
+	}
+	for _, digit := range c.Umask {
+		if digit < '0' || digit > '7' {
+			return nil, fmt.Errorf("umask must contain 3 or 4 octal digits between 0000 and 0777")
+		}
+	}
+	mask, err := strconv.ParseUint(c.Umask, 8, 12)
+	if err != nil || mask > 0777 {
+		return nil, fmt.Errorf("umask must contain 3 or 4 octal digits between 0000 and 0777")
+	}
 	if net.ParseIP(c.IP) == nil || c.Port < 1 || c.Port > 65535 {
 		return nil, fmt.Errorf("ip must be an IPv4 or IPv6 address and port must be between 1 and 65535")
 	}
-	if !filepath.IsAbs(c.StateDir) || len(c.AllowedRoots) == 0 {
-		return nil, fmt.Errorf("absolute stateDir and at least one allowedRoot required")
+	if !filepath.IsAbs(c.StateDir) {
+		return nil, fmt.Errorf("absolute stateDir required")
 	}
 	if (c.Password == "") == (c.PasswordFile == "") {
 		return nil, fmt.Errorf("configure exactly one of password or passwordFile")
 	}
 	secret := []byte(c.Password)
-	var err error
 	if c.PasswordFile != "" {
 		secret, err = os.ReadFile(c.PasswordFile)
 		if err != nil {
 			return nil, err
 		}
+		c.PasswordFile, err = filepath.Abs(c.PasswordFile)
+		if err != nil {
+			return nil, err
+		}
+		c.PasswordFile, err = filepath.EvalSymlinks(c.PasswordFile)
+		if err != nil {
+			return nil, err
+		}
 		secret = []byte(strings.TrimRight(string(secret), "\r\n"))
+	}
+	if c.PasswordSourceFile != "" {
+		c.PasswordSourceFile, err = filepath.Abs(c.PasswordSourceFile)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if len(secret) < 6 {
 		return nil, fmt.Errorf("password must contain at least 6 bytes")
@@ -141,10 +171,22 @@ func New(c Config, static string) (*Server, error) {
 		return nil, err
 	}
 	c.Password = ""
-	s := &Server{config: c, password: sha256.Sum256(secret), tasks: map[string]*Task{}, mux: http.NewServeMux()}
-	if err = s.openAllowedRoots(); err != nil {
-		s.Close()
-		return nil, err
+	s := &Server{config: c, umask: os.FileMode(mask), password: sha256.Sum256(secret), tasks: map[string]*Task{}, mux: http.NewServeMux()}
+	if c.PasswordSourceFile != "" {
+		s.passwordSourceReal = resolvedPrivatePath(c.PasswordSourceFile)
+	}
+	// Check the initial import before creating a database beneath an invalid share.
+	// A saved database remains authoritative over later bootstrap configuration.
+	if _, statErr := os.Stat(filepath.Join(c.StateDir, "state.sqlite")); errors.Is(statErr, fs.ErrNotExist) {
+		for _, sh := range c.Shares {
+			real, openErr := accessibleDirectory(sh.Path)
+			if openErr != nil {
+				return nil, openErr
+			}
+			if openErr = s.sharePrivacy(real); openErr != nil {
+				return nil, openErr
+			}
+		}
 	}
 	if err = os.Chmod(c.StateDir, 0700); err != nil {
 		s.Close()
@@ -167,6 +209,10 @@ func New(c Config, static string) (*Server, error) {
 		s.Close()
 		return nil, err
 	}
+	if err = os.Chmod(filepath.Join(c.StateDir, "state.sqlite"), 0600); err != nil {
+		s.Close()
+		return nil, err
+	}
 	if err = s.loadShares(); err != nil {
 		s.Close()
 		return nil, err
@@ -174,17 +220,15 @@ func New(c Config, static string) (*Server, error) {
 	s.routes(static)
 	return s, nil
 }
+func (s *Server) fileMode() os.FileMode { return 0666 &^ s.umask }
+func (s *Server) dirMode() os.FileMode  { return 0777 &^ s.umask }
+
 func (s *Server) Close() {
 	s.CancelTasks()
 	s.workers.Wait()
 	for _, sh := range s.shares {
 		if sh.root != nil {
 			_ = sh.root.Close()
-		}
-	}
-	for _, root := range s.allowedRoots {
-		if root.root != nil {
-			_ = root.root.Close()
 		}
 	}
 	if s.db != nil {
@@ -207,7 +251,7 @@ func (s *Server) originOK(r *http.Request) bool {
 	return err == nil && u.Host == r.Host && (u.Scheme == "http" || u.Scheme == "https")
 }
 func (s *Server) session(r *http.Request) (string, error) {
-	cookie, err := r.Cookie("nixos_file_station_session")
+	cookie, err := r.Cookie("file_station_session")
 	if err != nil {
 		return "", fail(401, "请先登录")
 	}
@@ -246,9 +290,9 @@ func (s *Server) routes(static string) {
 		return nil
 	})
 	s.api("POST /api/logout", func(w http.ResponseWriter, r *http.Request) error {
-		cookie, _ := r.Cookie("nixos_file_station_session")
+		cookie, _ := r.Cookie("file_station_session")
 		_, err := s.db.Exec("DELETE FROM sessions WHERE token=?", cookie.Value)
-		http.SetCookie(w, &http.Cookie{Name: "nixos_file_station_session", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: s.config.SecureCookies})
+		http.SetCookie(w, &http.Cookie{Name: "file_station_session", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: s.config.SecureCookies})
 		jsonResponse(w, map[string]bool{"ok": true})
 		return err
 	})
@@ -335,7 +379,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		errorResponse(w, err)
 		return
 	}
-	http.SetCookie(w, &http.Cookie{Name: "nixos_file_station_session", Value: t, Path: "/", MaxAge: 43200, HttpOnly: true, Secure: s.config.SecureCookies, SameSite: http.SameSiteStrictMode})
+	http.SetCookie(w, &http.Cookie{Name: "file_station_session", Value: t, Path: "/", MaxAge: 43200, HttpOnly: true, Secure: s.config.SecureCookies, SameSite: http.SameSiteStrictMode})
 	jsonResponse(w, map[string]string{"username": "admin", "csrf": csrf})
 }
 func validName(name string) bool {

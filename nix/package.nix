@@ -10,7 +10,7 @@
 let
   version = "1.0.0";
   frontend = buildNpmPackage {
-    pname = "nixos-file-station-frontend";
+    pname = "file-station-frontend";
     inherit version;
     src = lib.cleanSource ../web;
     nodejs = nodejs_24;
@@ -29,7 +29,7 @@ let
   };
 in
 (buildGoModule.override { go = go_1_26; }) {
-  pname = "nixos-file-station";
+  pname = "file-station";
   inherit version;
   src = lib.cleanSourceWith {
     src = lib.cleanSource ../.;
@@ -40,24 +40,24 @@ in
       in !builtins.elem topLevel [ "web" "node_modules" "result" ".direnv" ];
   };
   vendorHash = import ./vendor-hash.nix;
-  subPackages = [ "cmd/nixos-file-station" ];
+  subPackages = [ "cmd/file-station" ];
   env.CGO_ENABLED = "0";
   ldflags = [ "-s" "-w" ];
   nativeBuildInputs = [ makeWrapper ];
 
   postInstall = ''
-    mkdir -p "$out/share/nixos-file-station"
-    cp -r ${frontend}/. "$out/share/nixos-file-station/"
-    wrapProgram "$out/bin/nixos-file-station" \
-      --add-flags "-static $out/share/nixos-file-station"
+    mkdir -p "$out/share/file-station"
+    cp -r ${frontend}/. "$out/share/file-station/"
+    wrapProgram "$out/bin/file-station" \
+      --add-flags "-static $out/share/file-station"
   '';
 
   passthru = { inherit frontend; };
   meta = {
-    description = "NixOS File Station for single-administrator shared-directory management";
+    description = "File Station for single-administrator shared-directory management";
     homepage = "https://github.com/CYL96/NixOS-File-Station";
     license = lib.licenses.mit;
     platforms = lib.platforms.linux;
-    mainProgram = "nixos-file-station";
+    mainProgram = "file-station";
   };
 }
