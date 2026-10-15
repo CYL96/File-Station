@@ -58,7 +58,7 @@ in
       default = "/var/lib/nixos-file-station";
       description = ''
         Private persistent state directory, created with mode 0700 and owned
-        by nixos-file-station. Keep it outside every allowed root. The SQLite share
+        by nixos with group nixos-file-station. Keep it outside every allowed root. The SQLite share
         configuration here survives deployment changes and service restarts.
       '';
     };
@@ -86,7 +86,7 @@ in
       default = [ ];
       example = [ "documents" ];
       description = ''
-        Existing groups granting the dedicated service user access to shared
+        Existing groups granting the service process access to shared
         directories. Share ownership, ACLs and mount permissions remain under
         administrator control; the module does not recursively change them.
       '';
@@ -195,18 +195,17 @@ in
     ];
 
     users.groups.nixos-file-station = { };
-    users.users.nixos-file-station = {
-      isSystemUser = true;
-      group = "nixos-file-station";
-      home = cfg.stateDir;
-      extraGroups = cfg.supplementaryGroups;
-      description = "NixOS File Station service user";
-    };
 
-    systemd.tmpfiles.settings."nixos-file-station".${cfg.stateDir}.d = {
-      mode = "0700";
-      user = "nixos-file-station";
-      group = "nixos-file-station";
+    systemd.tmpfiles.settings."nixos-file-station".${cfg.stateDir} = {
+      d = {
+        mode = "0700";
+        user = "nixos";
+        group = "nixos-file-station";
+      };
+      Z = {
+        user = "nixos";
+        group = "nixos-file-station";
+      };
     };
 
     systemd.services.nixos-file-station = {
@@ -221,7 +220,7 @@ in
 
       serviceConfig = {
         Type = "simple";
-        User = "nixos-file-station";
+        User = "nixos";
         Group = "nixos-file-station";
         SupplementaryGroups = cfg.supplementaryGroups;
         ExecStart = utils.escapeSystemdExecArgs [

@@ -101,7 +101,7 @@ flake 支持 `x86_64-linux` 和 `aarch64-linux`。包内包含前端静态资源
 
 ## NixOS 服务
 
-在系统 flake 中加入本项目的 input，并导入 `nixosModules.default`。以下示例使用已有的 `configuration.nix`；将主机名和系统架构替换为实际值，已有 flake 可合并对应的 input 和 module。
+在系统 flake 中加入本项目的 input，并导入 `nixosModules.default`。系统需已配置非 root 用户 `nixos`；模块复用该账户，不创建或修改其登录配置。以下示例使用已有的 `configuration.nix`；将主机名和系统架构替换为实际值，已有 flake 可合并对应的 input 和 module。
 
 ```nix
 {
@@ -149,9 +149,9 @@ flake 支持 `x86_64-linux` 和 `aarch64-linux`。包内包含前端静态资源
 }
 ```
 
-部署前通过秘密管理工具或管理员操作提供 `/run/secrets/nixos-file-station-password`，密码要求与本地运行相同。该文件可以保持 root:root、`0600`；模块通过 systemd `LoadCredential` 传递给固定的非 root 用户 `nixos-file-station`。**必须使用运行时路径字符串，不要用 Nix 路径字面量或 `writeText` 把密码放进 Nix store。** 修改密码后重启服务。
+部署前通过秘密管理工具或管理员操作提供 `/run/secrets/nixos-file-station-password`，密码要求与本地运行相同。该文件可以保持 root:root、`0600`；模块通过 systemd `LoadCredential` 传递给运行用户 `nixos`，服务主组仍为专用组 `nixos-file-station`，`supplementaryGroups` 仅为服务进程追加组权限。服务与该账户的其他进程共享 UID，不再具有独立用户的隔离边界。**必须使用运行时路径字符串，不要用 Nix 路径字面量或 `writeText` 把密码放进 Nix store。** 修改密码后重启服务。
 
-允许根目录和首次导入的共享目录必须在服务启动前存在。示例的 tmpfiles 规则适用于新建专用目录；已有数据应由管理员按需配置组权限或 ACL，不要直接递归 `chown`。只读目录也需要服务用户具备读取和目录遍历权限。模块以 `0700` 创建状态目录，保留该目录才能保留共享设置、任务和回收站元数据。也可设置 `shares = {};`，首次登录后再添加共享。
+允许根目录和首次导入的共享目录必须在服务启动前存在。示例的 tmpfiles 规则适用于新建专用目录；已有共享数据应由管理员按需配置组权限或 ACL，不要直接递归 `chown`。只读目录也需要服务用户具备读取和目录遍历权限。模块以 `0700` 创建状态目录，并将状态目录及其内容的属主、属组设为 `nixos:nixos-file-station`，使原有状态可继续使用；不改变已有状态文件的权限位。保留该目录才能保留共享设置、任务和回收站元数据。也可设置 `shares = {};`，首次登录后再添加共享。
 
 `allowedRoots` 同时约束应用允许范围及 systemd 文件系统访问权限。共享级 `readOnly` 由应用强制执行；需要操作系统层面的只读保护时，应在相应允许根目录设置 `readOnly = true`，该根目录内所有共享都必须只读。
 
