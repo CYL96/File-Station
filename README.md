@@ -61,7 +61,7 @@ chmod 600 "$HOME/.config/file-station/config.json" "$HOME/.config/file-station/p
 ./test/update-service.sh
 ```
 
-脚本可从任意工作目录调用，会构建包含前后端的 Nix 包、更新 `current` 链接，再重启用户服务并显示状态；构建失败时不重启。脚本不安装服务、不修改配置、密码或持久状态，也不更新 NixOS 系统服务。旧名称的用户服务需先手动迁移服务名及启动路径，并保留原有状态目录。
+脚本可从任意工作目录调用，会构建包含前后端的 Nix 包、更新 `current` 链接，再重启用户服务并显示状态；构建失败时不重启。脚本不安装服务、不修改配置、密码或持久状态，也不更新 NixOS 系统服务。若无法读取 `file-station.service` 用户 unit，会提示并在构建、重启前退出；只有旧 `nixos-file-station.service` 时，须先按下文「从旧名称迁移」完成手动迁移，脚本不会接受或重启旧服务。
 
 
 ## 配置文件与环境变量：两种独立来源
@@ -328,6 +328,66 @@ sudo systemctl restart file-station
 默认状态路径从 `/var/lib/nixos-file-station` 改成 `/var/lib/file-station`。**迁移时停旧服务并备份，显式设置 `services.file-station.stateDir = "/var/lib/nixos-file-station";`（本地文件模式在 JSON 中设置 `stateDir`；Docker 环境变量模式设置 `ConfigPath`，文件模式同时匹配 `ConfigPath` 与 JSON `stateDir`，并将持久挂载目标指向该目录），保留原 SQLite 和所有状态文件。** 也可在停服务后完整迁移状态到新路径并正确设置运行 UID/GID 的属主，不能通过删除状态库重置。Nix 模块会把所选状态路径归属调整到新服务用户/组；Docker 入口只调整状态目录本身，已有内容由管理员安全迁移。不要同时运行新旧服务访问同一状态库。旧 bootstrap `shares` 不会覆盖数据库，已有共享继续保留，权限变化时可在 UI 修正。
 
 会话 Cookie 从 `nixos_file_station_session` 改为 `file_station_session`，旧浏览器会话不兼容，需要重新登录。旧 unit 的自定义覆盖、监控和日志命令也应迁移；仓库远程 URL 没有变更。
+
+### 手动迁移旧用户服务
+
+以下仅针对 `systemctl --user` 管理的旧 `nixos-file-station.service`，不是 NixOS 系统服务迁移命令。全程使用原普通用户；先查看旧 unit 的 `ExecStart`、环境和 drop-in，以及其实际配置文件，确认原 `stateDir`、密码来源和必要的启动选项。不要因为改名而套用新的默认状态目录，也不要重新生成密码。
+
+1. **先构建新包，成功后再停旧服务**。在仓库根目录执行，生成后续 unit 使用的可执行文件；构建失败则保留旧服务运行，不继续迁移：
+
+   ```sh
+   systemctl --user cat nixos-file-station.service
+   mkdir -p "$HOME/.local/state/file-station"
+   nix build path:.#default --out-link "$HOME/.local/state/file-station/current"
+   ```
+
+2. 将下面三个变量替换成**实际绝对路径**，停旧服务后备份完整状态、配置和旧 unit。备份目录必须在状态目录和所有共享之外；若共享包含整个家目录，不能把备份放在家目录。以下命令在同一个 shell 中依次执行：
+
+   ```sh
+   config_path='/absolute/path/to/existing-config.json'
+   state_dir='/absolute/path/to/existing-state'
+   backup_dir='/absolute/private/path/outside-shares/migration-backup'
+   umask 077
+   systemctl --user stop nixos-file-station.service
+   mkdir -p "$backup_dir"
+   systemctl --user cat nixos-file-station.service > "$backup_dir/nixos-file-station.service.txt"
+   cp -a -- "$config_path" "$backup_dir/config.json"
+   cp -a -- "$state_dir" "$backup_dir/state"
+   ```
+
+   若密码来自独立文件，还须将实际密码源文件私密备份到 `"$backup_dir/password"`，保留其原文件和权限；若 unit 通过凭据或环境提供密码，也须备份对应源文件和设置。unit 快照包含 drop-in 内容，私密保存；自定义 drop-in 的源文件也应一并备份。停止期间不要运行其他使用该状态目录的实例；备份失败不要启动新服务。
+
+3. 编辑 `"$config_path"`：删除已不支持的 `allowedRoots`，**显式保留原 `stateDir` 绝对路径**、现有密码来源以及监听等必要设置。JSON 中的 `password` / `passwordFile` 必须恰有一个非空；选用 JSON 后会忽略 `PASSWORD`，旧 `FILE_STATION_*` 也不再生效。若旧密码只在环境中，须安全迁入 JSON 的 `password` 或私有文件的 `passwordFile`，保持密码内容不变；若使用 systemd 凭据，须在新 unit 保留相应 `LoadCredential`，并让 JSON 的 `passwordFile` 指向实际凭据路径。保留需要的 `passwordSourceFile` 隐私保护元数据。不要删除 SQLite、其他状态文件或重置共享；已有共享从原数据库读取。
+
+4. 创建新的用户 unit。下面模板将 `-config` 写成上述 `config_path` 的实际路径，而不是假定配置已搬到新目录。按旧 unit 补回必要的凭据、挂载依赖和自定义设置，不要保留旧二进制名或旧启动路径：
+
+   ```sh
+   mkdir -p "$HOME/.config/systemd/user"
+   cat > "$HOME/.config/systemd/user/file-station.service" <<EOF
+   [Unit]
+   Description=File Station
+
+   [Service]
+   ExecStart=%h/.local/state/file-station/current/bin/file-station -config "$config_path"
+   Restart=on-failure
+
+   [Install]
+   WantedBy=default.target
+   EOF
+   ```
+
+   若已有 `file-station.service` 或其 drop-in，先备份并合并审阅，不要直接覆盖。Nix 包已指定静态资源路径，无须沿用旧 `-static` 路径。
+
+5. 禁用旧 unit 后再加载并启用新 unit；**禁止新旧服务并发访问同一状态目录**：
+
+   ```sh
+   systemctl --user disable nixos-file-station.service
+   systemctl --user daemon-reload
+   systemctl --user enable --now file-station.service
+   systemctl --user status file-station.service --no-pager
+   ```
+
+   登录确认原共享和设置保留；需要排错时查看 `journalctl --user -u file-station.service`，不要通过删除状态重新初始化。迁移完成后，后续更新仍使用 `./test/update-service.sh`。
 
 ## HTTPS、反向代理与防火墙
 
