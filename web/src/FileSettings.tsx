@@ -18,6 +18,8 @@ export function AdvancedSettings({ value, onClose, onSaved }: { value: FileSetti
     catch (cause) { setError(cause instanceof Error ? cause.message : '保存设置失败'); }
     finally { writing.current = false; setBusy(false); }
   }}><div className="modal-body advanced-settings-body"><fieldset disabled={busy}>
+    <h3>文件显示</h3>
+    <label className="settings-checkbox"><input type="checkbox" checked={draft.showHidden} onChange={event => setDraft({ ...draft, showHidden: event.target.checked })} />显示隐藏项目</label>
     <h3>列显示</h3><p className="field-help">勾选要显示的列。名称列始终显示；列顺序在文件列表表头拖动调整。</p>
     <p className="field-help">权限以 Unix 八进制显示（含特殊权限位）。所有者与所属组无法解析名称时显示 UID/GID；创建时间不受文件系统支持时显示「—」。</p>
     <ul className="settings-columns">{draft.columns.map(column => <li key={column.key}><label className="settings-checkbox"><input type="checkbox" checked={column.visible} disabled={busy || column.key === 'name'} onChange={event => setDraft({ ...draft, columns: draft.columns.map(item => item.key === column.key ? { ...item, visible: event.target.checked } : item) })} />{columnLabels[column.key]}</label></li>)}</ul>
