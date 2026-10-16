@@ -6,7 +6,7 @@ import { Icon, Modal } from './ui';
 export const columnLabels: Record<FileColumnKey, string> = { name: '名称', size: '大小', modified: '修改时间', type: '类型', extension: '扩展名', permissions: '权限', owner: '所有者', group: '所属组', created: '创建时间' };
 export const defaultFileSettings: FileSettings = { showHidden: false, columns: (Object.keys(columnLabels) as FileColumnKey[]).map((key, index) => ({ key, visible: index < 4 })), sort: { key: 'name', ascending: true } };
 
-export function AdvancedSettings({ value, onClose, onSaved }: { value: FileSettings; onClose: () => void; onSaved: (settings: FileSettings) => void }) {
+export function AdvancedSettings({ value, onClose, onSaved, onAbout }: { value: FileSettings; onClose: () => void; onSaved: (settings: FileSettings) => void; onAbout: () => void }) {
   const [draft, setDraft] = useState(value);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -23,5 +23,5 @@ export function AdvancedSettings({ value, onClose, onSaved }: { value: FileSetti
     <h3>列显示</h3>
     <ul className="settings-columns">{draft.columns.map(column => <li key={column.key}><label className="settings-checkbox"><input type="checkbox" checked={column.visible} disabled={busy || column.key === 'name'} onChange={event => setDraft({ ...draft, columns: draft.columns.map(item => item.key === column.key ? { ...item, visible: event.target.checked } : item) })} />{columnLabels[column.key]}</label></li>)}</ul>
 
-  </fieldset>{error && <p className="form-error" role="alert">{error}</p>}</div><footer className="modal-actions"><button type="button" className="button" disabled={busy} onClick={onClose}>取消</button><button className="button primary" disabled={busy}>{busy ? <><span className="spinner" />正在保存…</> : <><Icon name="check" size={16} />保存设置</>}</button></footer></form></Modal>;
+  </fieldset><div className="settings-about-entry"><button type="button" className="button" disabled={busy} onClick={onAbout}><Icon name="help" size={16} />关于 File Station</button></div>{error && <p className="form-error" role="alert">{error}</p>}</div><footer className="modal-actions"><button type="button" className="button" disabled={busy} onClick={onClose}>取消</button><button className="button primary" disabled={busy}>{busy ? <><span className="spinner" />正在保存…</> : <><Icon name="check" size={16} />保存设置</>}</button></footer></form></Modal>;
 }
