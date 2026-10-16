@@ -2,44 +2,180 @@
 
 [简体中文](README.md) | **English**
 
-A single-administrator web file manager for deployment as a regular Linux user, with Docker, or on NixOS. It combines a React + TypeScript frontend, a Go HTTP server, and persistent SQLite state. File contents stay directly in shared directories; refresh to see changes made on the host or through Samba.
+A single-administrator web file manager for Linux, Docker, and NixOS. Files stay in their original directories; SQLite persists settings, shares, tasks, and sessions. Refresh to see changes made on the host or through Samba.
 
-The application must run as a non-root user. It does not provide multi-user Linux identity mapping, privilege escalation, or system administration capabilities. **The first startup has no shares by default: home directories, mount points, and all other paths are never shared automatically.** After signing in, add directories manually in **Settings → Share settings**. In a container, mount the directory first, then add its container-side path.
+- Multiple shares, read-only shares, search, sorting, and list/grid views.
+- Upload, download, create, rename, copy, move, conflict handling, and a recycle bin.
+- Background tasks, progress, cancellation, and retries after failure.
+- Image previews, MP4/WebM playback, UTF-8 text editing, and Markdown source/preview/visual editing.
+- Chinese and English interfaces, with configurable date and permission display formats.
 
-## Interface preview
+**Choose an installation method:** [Docker / Compose](#docker--compose) · [Prebuilt binaries](#prebuilt-binaries) · [Build from source](#build-from-source) · [Nix / NixOS](#nix--nixos)
+
+**Run only as a non-root user.** All file operations use the Linux identity of the service process; there is no multi-user identity mapping or privilege escalation. By default, the first startup has no shares: sign in and add existing directories. With Docker, mount the data first, then add its container-side path.
 
 ![File Station file manager in Chinese, showing shared-directory navigation, a file list, and the file operations toolbar](docs/screenshots/files-list-zh.png)
 
-The screenshot uses demo data and the Chinese interface. A fresh installation still starts with no shares; add your own directories.
+The screenshot uses demo data and the Chinese interface. A fresh installation still requires you to add your own shares.
 
-## Main features
+## Installation and deployment
 
-- Administrator password sign-in, 12-hour sessions, and CSRF protection. Passwords are hidden by default; use the eye button on the right of the input to show or hide them. A dedicated **Sign out** button appears at the top right, retaining both its icon and text on narrow screens.
-- Simplified Chinese and English on the sign-in page and throughout the application, with immediate switching through the language selector. Dates, numbers, and sorting adapt to the selected language. The initial language follows the browser language (Simplified Chinese for Chinese browsers, English otherwise). Manual choices are saved in the current browser and survive refreshes and sign-outs. Language switching still works when local storage is blocked, but the choice is not saved. Language settings do not change file names, share names, or file contents.
-- Browse and manage multiple shared directories, with read-only shares, name search within the current directory, sorting, multi-selection, and list/grid views. The grid shows only icons and names; choose a sort field and ascending/descending order from the **Sort** menu next to the select-all checkbox. Folders always appear before files. In list view, sort using column headers. Advanced settings can save hidden-item visibility and which list columns are shown. List headers and rows use matching column widths; scroll horizontally on narrow screens to see the remaining columns.
-- General settings lets you choose and preview a date display format, applied consistently to file modification/creation times, recycle-bin deletion times, and preview windows. Saved changes take effect immediately and persist across refreshes and restarts.
-- General settings also lets you choose and preview octal permissions (such as `0755`, the default) or symbolic permissions (such as `rwxr-xr-x`) for file-list and recycle-bin permission columns, including special bits shown as `s/S/t/T`. Saved changes take effect immediately and persist across refreshes and restarts; actual permissions and sorting remain unchanged. Enable the permission column under **Advanced settings → Columns**.
-- A sidebar starting with **Shared spaces**, with share navigation, the recycle bin, and keyboard shortcuts.
-- Create folders, rename, copy, move, upload, download, and calculate sizes. For name conflicts, skip, replace files, or keep both copies.
-- A recycle bin with restore and confirmed permanent deletion; background tasks, upload progress, cancellation, and retries after failure.
-- PNG/JPEG/GIF/WebP image previews that initially fit the window while preserving aspect ratio (without enlarging small images). Zoom with Ctrl + mouse wheel or buttons, drag to pan when zoomed in, and restore fit-to-window with one click. Preview and edit UTF-8 text up to 1 MiB.
-- Native MP4/WebM video playback with seeking, volume control, and browser fullscreen. Original files are read on demand, without autoplay or server-side transcoding. H.264 + AAC is recommended for MP4; actual codec support depends on the browser and operating system. Unsupported or damaged files can still be downloaded for viewing elsewhere.
-- Markdown rendering, source editing, side-by-side source and preview, and visual editing. Visual changes reserialize Markdown and may normalize whitespace, lists, tables, or unsupported syntax. Use source editing when exact preservation is required.
-- **About File Station** in Advanced settings shows an introduction, the current version, the project URL, and the open-source license. **Check for updates** connects to GitHub from the server to check the latest stable Release and provide its release-page link; it does not download or install updates automatically. Missing Releases, versions that cannot be compared, network errors, and GitHub rate limits are reported separately.
+### Docker / Compose
 
-Failed copy, move, and recycle-bin entries in the task center can retry unfinished items, creating a new task while retaining the original record. Copy and move retries can use a different conflict policy. Saved retry parameters remain available after refreshes and restarts; historical tasks from older versions that did not save these parameters must be started again. Failed uploads can be retried on the current page; after refreshing or signing out, select the files again.
+Run the following from the repository root, using the repository's Dockerfile to build the image locally. Create a private `.env` in this directory (mode `0600`, never committed):
 
-Changing the language reinitializes the Markdown visual editor toolbar. The current document and unsaved state are retained, but the visual editor's undo history, cursor position, and uncommitted insertion dialogs are reset. Finish any dialog operation before switching languages.
+```dotenv
+PUID=1000
+PGID=1000
+UMASK='0022'
+PASSWORD='replace-with-your-own-long-password'
+ConfigPath='/var/lib/file-station'
+```
 
-## Local build and run
+Set `PUID` / `PGID` to a non-root UID/GID with access to your data (use `id -u` / `id -g` to check), and replace the password. Passwords must be at least 6 bytes; 12 or more is recommended. Single-quote the password in `.env` to avoid `$` interpolation; a `$` written directly in Compose YAML must instead be escaped as `$$`.
 
-Requires Linux, Go 1.26, Node.js 24, and npm; alternatively, use `nix develop path:.`. From the repository root, as a regular user:
+```sh
+mkdir -p state
+docker compose up -d --build
+```
+
+Open <http://127.0.0.1:8080>. The application defaults to listening on `0.0.0.0:8080` inside the container, while the repository's Compose configuration publishes only to the host loopback address. `./state` is persistently mounted at `ConfigPath`; setting it to `/config`, for example, automatically changes the mount to `./state:/config`. **`ConfigPath` is the state directory, not a config.json path.** External access requires explicitly changing the port mapping and firewall; see [Passwords and networking](#passwords-and-networking).
+
+Add shared-data mounts to the existing `volumes` in `compose.yaml`, for example:
+
+```yaml
+      - /srv/documents:/mnt/documents
+      # - /srv/archive:/mnt/archive:ro
+```
+
+After recreating the container, add `/mnt/documents` in the UI, not the host path. Unmounted host directories are invisible, and mounting a directory does not automatically create a share.
+
+#### Container identity and permissions
+
+- The root entrypoint defaults to `1000:1000`, prepares only the state directory itself, then drops privileges with `su-exec`. It does not recursively change state contents or shared data. `PUID` / `PGID` accept only decimal integers from `1` to `4294967294`, without leading zeros; empty values are invalid.
+- No `user:` setting is needed by default. With an explicit non-root `--user UID:GID`, unset `PUID` / `PGID` inherit that identity; explicitly conflicting values cause an error. Prepare state-directory ownership beforehand: the entrypoint does not elevate privileges. The repository's Compose configuration explicitly passes `PUID` / `PGID` by default, so adjust them to match when using `user:`.
+- Keep the repository's `cap_drop: ALL`, only the added `CHOWN` / `SETUID` / `SETGID` capabilities, and `no-new-privileges`. `su-exec` clears supplementary groups, so do not rely on `group_add`; grant access through the actual UID, primary group, or ACLs. Rootless Docker also requires accounting for host UID mappings.
+- **When changing UID/GID for existing state, stop the service, back up, and migrate ownership of the entire state directory while preserving contents and permissions. Do not delete the database or recursively chown shared data.**
+
+#### Container JSON mode
+
+To customize the listener, enable secure cookies, or use a password file, use the JSON format in [Configuration reference](#configuration-reference), set `ip` to `"0.0.0.0"`, and use container-side paths throughout. Align JSON `stateDir`, `ConfigPath`, and the state mount target, then merge the following into the Compose service:
+
+```yaml
+    volumes:
+      - './state:${ConfigPath-/var/lib/file-station}'
+      - ./config.json:/etc/file-station/config.json:ro
+    command: ["-config", "/etc/file-station/config.json", "-static", "/usr/share/file-station"]
+```
+
+Merge with the existing `volumes`; do not declare that key twice. JSON can use `password`, or `passwordFile` with an additional read-only password-file mount; exactly one source must be nonempty. Configuration and passwords must be readable by the runtime UID and remain outside shares. Keep `-static` when overriding the image command.
+
+In JSON mode, Go ignores `ConfigPath`, `PASSWORD`, and `UMASK`, but the container entrypoint still validates and prepares `ConfigPath` without reading JSON. If it differs from `stateDir`, you must provide persistent storage and permissions for the actual state directory yourself. Changing only the state directory does not require JSON mode.
+
+### Prebuilt binaries
+
+Download the archive for your Linux architecture (amd64 or arm64) and `SHA256SUMS` from [Releases](https://github.com/CYL96/File-Station/releases). **Go, Node.js, npm, and Nix are not required to run it.** GitHub's automatically generated Source code archives are not binary installers.
+
+First prepare configuration, a private password, and a writable state directory under [Local configuration and password](#local-configuration-and-password). Then verify, extract, and start from the download directory. The following uses amd64 `v1.0.0` as an example; substitute your downloaded version. `--ignore-missing` allows downloading just one architecture:
+
+```sh
+sha256sum --check --ignore-missing SHA256SUMS
+tar -xzf file-station-v1.0.0-linux-amd64.tar.gz
+cd file-station-v1.0.0-linux-amd64
+./file-station -config "$HOME/.config/file-station/config.json" -static ./web/dist
+```
+
+The archive includes the executable and matching `web/dist`. Run as a non-root user and open <http://127.0.0.1:8080>. When starting from another working directory, use the absolute path to the extracted `web/dist` for `-static`.
+
+### Build from source
+
+Requires Linux, Go 1.26, Node.js 24, and npm; alternatively, first run `nix develop path:.`. Build from the repository root:
 
 ```sh
 npm --prefix web ci
 npm --prefix web run build
 go build -o /tmp/file-station ./cmd/file-station
+```
 
+Prepare configuration under [Local configuration and password](#local-configuration-and-password), then start as a non-root user from the repository root:
+
+```sh
+/tmp/file-station -config "$HOME/.config/file-station/config.json" -static ./web/dist
+```
+
+Open <http://127.0.0.1:8080>. Keep the executable and matching frontend when deploying; use the correct `-static` path if starting from another directory.
+
+### Nix / NixOS
+
+Build the package from the repository root, prepare configuration under [Local configuration and password](#local-configuration-and-password), then run it. The wrapper includes the frontend path, so `-static` is unnecessary:
+
+```sh
+nix build path:.#file-station
+./result/bin/file-station -config "$HOME/.config/file-station/config.json"
+```
+
+`default` and `file-station` refer to the same package, supporting `x86_64-linux` and `aarch64-linux`.
+
+#### NixOS service
+
+Merge this input into your existing system flake and add `inputs.file-station.nixosModules.default` to the host's `modules` list:
+
+```nix
+{
+  inputs.file-station.url = "github:CYL96/File-Station";
+}
+```
+
+Add the service configuration to the same `modules` list (within the `outputs = inputs@{ ... }: ...` scope, using its outer `inputs`):
+
+```nix
+{ pkgs, ... }: {
+  services.file-station = {
+    enable = true;
+    package = inputs.file-station.packages.${pkgs.stdenv.hostPlatform.system}.default;
+    ip = "127.0.0.1";
+    port = 8080;
+    passwordFile = "/run/secrets/file-station-password";
+    # stateDir = "/var/lib/file-station";
+    # supplementaryGroups = [ "documents" ];
+    # secureCookies = true; # HTTPS only
+  };
+}
+```
+
+- The module generates JSON; no handwritten local configuration is needed. Prepare a runtime password file before deploying; it may be `root:root 0600`. systemd `LoadCredential` passes it to the service and the original source path is protected. **Use an absolute runtime path string, never a Nix path literal, `writeText`, or another store file for the password.**
+- By default, the module creates a dedicated `file-station` user/group and no shares. You can set `user` / `group`; custom users must already be declared in `users.users`, and the module creates the group. `supplementaryGroups` affects only the service process; reusing an account loses the isolation of a dedicated UID.
+- The module fixes JSON `umask: "0077"` and systemd `UMask=0077`. Ordinary data access follows service-account permissions, with no separate path allowlist and no recursive changes to shared directories. The module prepares ownership/group of private state and its contents while preserving existing state-file permissions.
+- Arrange network-mount ordering yourself, for example with `systemd.services.file-station.unitConfig.RequiresMountsFor = [ "/mnt/documents" ];`. The module does not open the firewall automatically.
+
+```sh
+sudo nixos-rebuild switch --flake /path/to/system-flake#myhost
+systemctl status file-station
+journalctl -u file-station
+```
+
+#### Cachix binary cache
+
+The public cache is [cyl96-file-station](https://app.cachix.org/cache/cyl96-file-station). Add this to your NixOS configuration and rebuild. Downloads require no token; trusting the public key means trusting the maintainer's build outputs:
+
+```nix
+{
+  nix.settings = {
+    extra-substituters = [ "https://cyl96-file-station.cachix.org" ];
+    extra-trusted-public-keys = [ "cyl96-file-station.cachix.org-1:DVc1WCQcvfD3w6trxmPHxDZRo49HxAnojhMoslE4Bio=" ];
+  };
+}
+```
+
+Cache matches require exact store paths. Use `inputs.file-station.packages` as above, retain the project's locked nixpkgs without setting `file-station.inputs.nixpkgs.follows`, and lock to an uploaded commit. Source or build-option overrides may miss the cache. Use `nix build --dry-run github:CYL96/File-Station#default` to inspect the plan; only actual logs showing paths copied from the Cachix URL establish a hit. Cache misses build locally. Keep the official `https://cache.nixos.org` for shared dependencies; `extra-substituters` does not replace it.
+
+## Configuration
+
+### Local configuration and password
+
+These steps are shared by prebuilt binaries, source builds, and directly running the Nix package. Docker defaults to `.env`; the NixOS module generates configuration itself. Prepare directories and a password as the non-root account that will run the service. The password commands below use Bash:
+
+```sh
 mkdir -p "$HOME/.config/file-station" "$HOME/.local/state/file-station"
 chmod 700 "$HOME/.config/file-station" "$HOME/.local/state/file-station"
 read -rs -p 'Administrator password: ' password
@@ -48,7 +184,7 @@ printf '\n'
 unset password
 ```
 
-Create `$HOME/.config/file-station/config.json`, replacing `/absolute/home` with the actual absolute path. JSON does not expand environment variables:
+Passwords must be at least 6 bytes; 12 or more is recommended. Create `$HOME/.config/file-station/config.json`, replacing `/absolute/home` with the actual absolute path (JSON does not expand environment variables):
 
 ```json
 {
@@ -64,394 +200,126 @@ Create `$HOME/.config/file-station/config.json`, replacing `/absolute/home` with
 
 ```sh
 chmod 600 "$HOME/.config/file-station/config.json" "$HOME/.config/file-station/password"
-/tmp/file-station -config "$HOME/.config/file-station/config.json" -static ./web/dist
 ```
 
-Open <http://127.0.0.1:8080> and add existing directories in **Settings → Share settings**. Alternatively, set `password` directly in JSON and remove `passwordFile`; exactly one of the two sources must be nonempty.
+Keep configuration and passwords outside all shares. You may replace `passwordFile` with JSON `password`, but exactly one password source must be nonempty. Never use a documentation example as your real password.
 
-### Updating an existing user service
+### Configuration reference
 
-If you have configured a `file-station.service` user service whose executable is `$HOME/.local/state/file-station/current/bin/file-station`, run:
+The two sources **are not combined**. Restart after changing startup configuration; saving shares through the UI takes effect immediately.
+
+| Startup mode | Configuration source and defaults |
+| --- | --- |
+| `-config /path/config.json` | Built-in defaults + strict JSON; completely ignores `ConfigPath`, `PASSWORD`, and `UMASK`, without using them to fill missing fields. Unknown fields, invalid JSON, or extra JSON values prevent startup |
+| Omit `-config` or pass an empty value | Reads `PASSWORD`, `UMASK`, and `ConfigPath`; listens on `0.0.0.0:8080`, starts with no shares, and uses `secureCookies=false` |
+
+`-config` does not select a file through an environment variable. `-static` independently selects the frontend directory, defaults to `web/dist`, and is not a JSON field. Docker and Nix already specify the packaged path.
+
+| JSON field | Default / description |
+| --- | --- |
+| `ip` / `port` | `127.0.0.1` / `8080`; IP without a port or IPv6 brackets, and port from `1–65535` |
+| `stateDir` | `/var/lib/file-station`; a private, persistent, nonempty absolute directory, owned by the runtime UID with mode `0700`. Regular users usually need to select a writable path |
+| `password` / `passwordFile` | Exactly one must be nonempty; at least 6 bytes, with 12 or more recommended. File paths must be absolute; only trailing newlines are stripped, preserving other whitespace |
+| `umask` | `"0022"`; a 3- or 4-digit octal string no greater than `0777`, not a number or empty string |
+| `secureCookies` | `false`; set to `true` for HTTPS, not plain HTTP |
+| `shares` | `[]`; imported only on first initialization, then managed in `state.sqlite` |
+| `passwordSourceFile` | Empty; additionally protects the original password source's absolute path and resolvable real path, without reading it or using it for authentication. Set automatically by NixOS credential deployment; applies on every startup and is not cleared when changing password sources. Remove or empty it explicitly to clear it |
+
+| Environment variable | Default / description |
+| --- | --- |
+| `PASSWORD` | No default; required in environment-variable mode, with the length rules above. Ignored in JSON mode |
+| `UMASK` | `0022`, with the same format as JSON `umask`; explicitly empty values are invalid. Ignored in JSON mode |
+| `ConfigPath` | `/var/lib/file-station`, case-sensitive; the state directory, not a JSON path. Must be a nonempty absolute directory that does not normalize or resolve to `/`; containers also require that the directory itself is not a symlink. Go JSON mode ignores it, but the container entrypoint still uses it |
+| `PUID` / `PGID` | Container identity only, not application configuration; see [Container identity and permissions](#container-identity-and-permissions) |
+
+Ordinary paths may contain spaces. The repository's Compose configuration passes only these five variables, not other host variables automatically, and offers no short-name or legacy aliases.
+
+Optional initial JSON import: `"shares": [{"id":"documents","name":"文档","path":"/srv/documents","readOnly":false}]`. `name` and `path` are required, `id` may be omitted, and `readOnly` defaults to `false`. The NixOS equivalent is `shares.documents = { name = "文档"; path = "/srv/documents"; readOnly = false; };`, where the attribute name is the share ID. **Even an initially empty list completes initialization: later configuration changes, restarts, and generation rollbacks do not reimport shares.** Manage shares through the UI afterward.
+
+## Usage
+
+### First sign-in and shares
+
+1. Open the address configured for your deployment and sign in with the administrator password.
+2. In **Settings → Share settings**, add existing, accessible, non-overlapping directories. Docker requires container-side mount paths.
+3. Enable read-only access as needed. Shares cannot cover state or password paths. Browsing from `/` in the directory picker does not mean `/` can be shared; choose specific data subdirectories rather than the entire home directory.
+
+Saving takes effect immediately. Removing a share does not delete files. Share changes return 409 while file requests are being processed; affected shares cannot be modified or removed while they have active tasks. A nonempty recycle bin prevents changing the path or removing a share. Missing directories, unavailable mounts, or insufficient permissions mark the share unavailable without automatically deleting its configuration.
+
+### Common operations and interface settings
+
+- Browse, search, sort, and select multiple items in list or grid view, then upload, download, create, rename, copy, move, or use the recycle bin. For conflicts, skip, replace files, or keep both; same-name directories are not recursively overwritten.
+- The task center shows progress and supports cancellation. Failed copy, move, and recycle-bin tasks can retry unfinished items while retaining old records; older tasks without retry parameters must be started again. Upload retries work only on the current page: select files again after refresh or sign-out. Unfinished tasks are marked interrupted on restart and are not automatically replayed.
+- Switch Chinese/English at the top; the choice is stored in the current browser. **Settings → General settings** controls date format and octal/symbolic permission display; enable permission columns in **Advanced settings → Columns**. These settings do not change file contents or actual permissions.
+- Images can be previewed; MP4/WebM use native browser playback without server-side transcoding. H.264 + AAC is recommended for MP4; actual support depends on the browser and operating system. Download unsupported files instead.
+- Text and Markdown can be edited within the limits under [File operations and editing](#file-operations-and-editing). Switching languages during Markdown visual editing retains the document and unsaved state, but resets undo history, the cursor, and uncommitted insertion dialogs. Finish dialog operations before switching.
+
+## Security and limitations
+
+### Permissions and state backups
+
+- There is no `allowedRoots` allowlist. Access depends on the service's actual UID, primary/supplementary groups, Unix permissions, ACLs, and mount options; all parent directories must be traversable. Read-only shares are an additional restriction: use read-only mounts or ACLs for operating-system-level protection. Application checks do not replace system isolation; mount points and hard links may still expose data.
+- **Preserve the entire state directory and share IDs.** Do not delete `state.sqlite` to reset settings. State must not be temporary, overlap shares, or be replaced during deployment.
+- Recycle-bin contents occupy space in `.webui-trash` under each share; metadata is in the state database. Stop the service and other writers, then consistently back up shared files, hidden recycle bins, and the entire state directory together, and privately back up startup configuration and passwords. **The recycle bin is not a backup, and NixOS rollbacks do not undo file or database changes.**
+
+### File operations and editing
+
+- Share root paths resolve symlinks. Inside shares, symlinks are not followed: they cannot be entered, downloaded, previewed, or copied; move, rename, and recycle operations act on the link itself. Only regular files and directories are handled. The share root cannot be deleted, and ordinary APIs cannot operate on internal `.webui-*` paths.
+- New files use `0666 & ~umask`, and new directories use `0777 & ~umask`; default `0022` yields `0644/0755`, while NixOS `0077` yields `0600/0700`, still subject to system ACLs and other rules. Text saves, same-filesystem moves, and recycle-bin restores preserve original permissions. Copying does not preserve ownership, ACLs, extended attributes, hard-link relationships, or original timestamps.
+- Uploads and copies first write hidden staging files. Cancellation does not roll back completed items, and interruptions may leave staging files; clean them up only after confirming no tasks remain. Same-filesystem moves are atomic renames; cross-filesystem moves copy then delete and **are not an overall transaction**. Failure can leave both copies.
+- Text editing is limited to existing regular UTF-8 files of at most 1 MiB without NUL bytes. Saving is unavailable in read-only shares or the recycle bin, without write permission, or for files with multiple hard links. Saves must preserve permissions, ownership/group, ACLs, and extended attributes or they are rejected; atomic replacement changes the inode and timestamps. External changes report a conflict and retain the draft, but **this is not filesystem-level CAS**. Uniform CRLF is preserved; other line endings become LF.
+- Markdown previews do not execute raw HTML or automatically load external images. Visual editing reserializes Markdown; use source editing for exact preservation.
+
+### Passwords and networking
+
+- Set password files and configuration containing passwords to `0600`, keep them outside shares, and never commit them or put them in image layers or the Nix store. Plaintext environment variables and Compose configuration can be read through `docker inspect` or by authorized host administrators. Use read-only JSON / password files to reduce environment-variable exposure.
+- Sessions last 12 hours; cookies use HttpOnly and SameSite=Strict, with CSRF protection. Enable `secureCookies` behind an HTTPS proxy (the same NixOS option; Docker requires JSON mode). Enabling it over plain HTTP prevents browsers from sending the session cookie.
+- Reverse proxies must preserve Host and keep the frontend and API on the same origin. Disable SSE buffering for `/api/events`, extend connection timeouts, and set upload size limits as needed. Expose only necessary ports to trusted networks and prefer HTTPS; NixOS does not open the firewall automatically.
+- **Advanced settings → About File Station → Check for updates** contacts GitHub from the server, checks only stable Releases, and links to the release page. It **does not download or install updates automatically**.
+
+## Upgrades and legacy migration
+
+### Regular upgrades
+
+Read the target version's release notes, prepare the new version, then stop the service and consistently back up state, shared files, and hidden recycle bins, retaining configuration and passwords. Preserve the original state path, share IDs, runtime UID/GID, and necessary startup arguments. Never let old and new instances access the same state database concurrently.
+
+| Installation method | How to update |
+| --- | --- |
+| Docker / Compose | Update the local repository to the target version, retain `.env`, mounts, and `./state`, then run `docker compose up -d --build` to recreate the container |
+| Prebuilt binary | Download the target version and checksums, verify, and extract into a new directory. Stop the old process, update the command or service to use the new executable and matching `web/dist`, and start with the original configuration |
+| Source build | Update source and rebuild both frontend and backend. Stop the old process, deploy matching outputs, and start with the original configuration |
+| Nix package | Update source or the locked flake version, run `nix build` again, switch the startup path to the new package, and restart. For existing user services, see below |
+| NixOS service | Update the `file-station` locked version in your system flake and run `nixos-rebuild switch` |
+
+After upgrading, reopen the page and confirm shares, settings, and files work as expected. Switching to an old program or NixOS generation does not restore files or the state database; use a consistent backup when restoration is needed.
+
+### Existing user services
+
+Only if you already have a `file-station.service` user service whose `ExecStart` points to `$HOME/.local/state/file-station/current/bin/file-station`, run this from the updated repository:
 
 ```sh
 ./test/update-service.sh
 ```
 
-The script can be called from any working directory. It builds the Nix package containing both frontend and backend, updates the `current` link, then restarts the user service and displays its status. It does not restart the service if the build fails. It does not install a service, change configuration, passwords, or persistent state, or update a NixOS system service. If it cannot read the `file-station.service` user unit, it reports the problem and exits before building or restarting. If only the old `nixos-file-station.service` exists, first complete the manual migration under [Migrating from the old name](#migrating-from-the-old-name-breaking-changes); the script neither accepts nor restarts the old service.
+The script builds the Nix package, updates the `current` link, and restarts the user service. It does not install a service, change configuration, passwords, or state, or update NixOS system services. It does not restart if the build fails or the user unit is missing. For services using other executable paths, update the actual deployment path and restart accordingly. Old-name services require manual migration first; the script neither migrates nor restarts them.
 
+### Legacy migration
 
-## Configuration files and environment variables: two independent sources
+The old `nixos-file-station` executable/package, `services.nixos-file-station`, old unit, and `FILE_STATION_*` environment variables have been removed without compatibility aliases. Use `file-station` / `services.file-station` and the configuration above. Remove old `allowedRoots` and grant access with system permissions; remove old Compose secrets or move to explicitly selected JSON mode. The repository address is `CYL96/File-Station`.
 
-Configuration files are recommended for local and NixOS deployments. Docker defaults to supplying the password directly through `PASSWORD`. The application neither detects the deployment environment automatically nor combines the two sources of application configuration:
-
-- **File mode**: Select a JSON file only through a nonempty `-config /absolute/config.json`. Configuration then comes exclusively from **built-in defaults + the JSON file**. Go configuration loading completely ignores `ConfigPath`, `PASSWORD`, and `UMASK`, including empty or invalid values. They neither override the file nor fill in missing fields. Startup fails if the file cannot be read, the JSON is invalid, or it contains unknown fields or extra JSON values.
-- **Environment-variable mode**: `-config` is empty by default. When it is omitted or passed as `-config ''`, application configuration comes from `PASSWORD`, `UMASK`, and the case-sensitive `ConfigPath`. `ConfigPath` is the persistent state directory for saved settings, defaulting to `/var/lib/file-station`. It must be a nonempty absolute path and must not be the root directory `/` (including paths that resolve to root after normalization or successful symlink resolution). Explicitly empty values and relative paths are invalid. It is never a JSON file path. Ordinary non-root absolute paths may contain spaces. The listener is fixed at `0.0.0.0:8080`, the initial share list is empty, and `secureCookies` is `false`. Use JSON to customize the listener or enable secure cookies.
-
-`-config` does not read any environment variable to select the configuration file. The static asset directory is **specified only by `-static`**, defaults to `web/dist`, and must contain the frontend build output. The Nix wrapper and Docker image command already specify an absolute path inside the package. The static directory is not part of the JSON configuration. Container entrypoint rules for preparing the state directory are independent of Go configuration loading; file mode must also follow the mount and permission requirements below.
-
-| JSON field (file mode only) | Built-in default and description |
-| --- | --- |
-| `ip` | `127.0.0.1`; an IPv4/IPv6 address without a port or IPv6 brackets; `0.0.0.0` listens on all IPv4 interfaces |
-| `port` | `8080`; an integer from `1–65535` |
-| `stateDir` | `/var/lib/file-station`; a separate, private, persistent directory with a nonempty absolute path. Regular users usually need to override it. This field determines the directory in file mode; `ConfigPath` is not read |
-| `password` | No default password. Exactly one of this field and `passwordFile` must provide a nonempty source; at least 6 bytes, with at least 12 bytes recommended |
-| `passwordFile` | Absolute path to a runtime password file; trailing newlines are stripped when reading, while other whitespace is retained |
-| `passwordSourceFile` | Empty by default; advanced deployment metadata that additionally prevents shares from covering the original password source path. This file is not read and is not an authentication password source |
-| `umask` | `"0022"`; must be a 3- or 4-digit octal string with a value from `0000` to `0777`, not a JSON number or an empty string |
-| `secureCookies` | `false`; set to `true` for HTTPS deployments |
-| `shares` | `[]`; optional initial import. Subsequent share settings are stored in the state database |
-
-Docker deployments use only the following five environment variables, without aliases for old names or other short names:
-
-| Environment variable | Default and description |
-| --- | --- |
-| `PUID` | Defaults to `1000` for the root entrypoint. UID must be a decimal integer from `1` to `4294967294`, without leading zeros; an explicitly empty value is invalid. Not application configuration |
-| `PGID` | Defaults to `1000` for the root entrypoint; the same format rules apply as for UID. Not application configuration |
-| `UMASK` | `"0022"`; the same format as JSON `umask`. An explicitly empty value is invalid; completely ignored in file mode |
-| `PASSWORD` | No default password; required in environment-variable mode, at least 6 bytes, with at least 12 bytes recommended. Completely ignored in file mode |
-| `ConfigPath` | `/var/lib/file-station`; persistent directory for SQLite state such as settings, shares, tasks, and sessions. It must be a nonempty absolute path that does not point to the root directory `/` (including after normalization or successful symlink resolution). Explicitly empty values and relative paths are invalid. It is not a JSON file path. Go file mode ignores it, but the container entrypoint always prepares the state directory according to it |
-
-`passwordSourceFile` supports deployments such as NixOS `LoadCredential` that copy the original password to a private credential path. `passwordFile` points to the credential actually read, while `passwordSourceFile` only protects the original absolute path and any resolvable real path against shares covering their ancestor directories. The service does not need permission to read or traverse the original password file. Unresolvable portions receive best-effort protection based on the known absolute path and resolvable ancestors, without preventing startup. This privacy metadata takes effect on every startup, rather than being a one-time import like `shares`. Changing the authentication password source does not clear it automatically. To remove it intentionally, delete or clear `passwordSourceFile` in JSON.
-
-Password files and configuration files containing passwords should have mode `0600`, remain outside all shares, and never be committed to the repository. Docker can use `PASSWORD` directly, but plaintext environment variables and Compose configuration can be read through `docker inspect` or by authorized host administrators. Do not commit passwords to version control or write them into image layers or the Nix store. Read-only JSON file mode is an option when you want less exposure through environment variables. Local deployments can continue using `passwordFile`; NixOS must use a runtime password file. Changes to the listener, password, umask, or other startup configuration require a restart. Saving shares through the UI does not.
-
-The **Settings** gear button at the top opens the settings category page. Under **General settings**, choose the default format, `yyyy-MM-dd`, `yyyy/MM/dd`, `dd/MM/yyyy`, or `MM/dd/yyyy`. The default date format follows the interface language; fixed formats do not. All formats use the browser's local time zone and a 24-hour clock, including hours, minutes, and seconds. Click **Save general settings** to apply your selection. Use **Share settings** to manage shared directories and access permissions. **Back to settings** returns to the category page while retaining unsaved edits within the current dialog. Use **Close** at the top right or Esc to close settings; reopening returns to the category page. Settings cannot be closed or returned to the category page while saving settings or refreshing share status. The language selector remains separate, and settings pages follow the selected language. **Advanced settings** still opens separately from the file toolbar.
-
-### Directory permissions and persistent state
-
-There is no manually configured `allowedRoots` allowlist or fixed `/etc` or `/nix` path denylist. The directory picker browses from `/` and lists directories the process can read and traverse. Whether a share can be added, read, or written depends on the **service process's actual UID, primary/supplementary groups, Unix permissions, ACLs, and mount options**. Every parent directory requires traversal permission; listing a directory requires read permission, and writes also require the relevant write permissions. File operations do not run as the user signed into the browser, and the application does not automatically `chown` shared data.
-
-Shares must be existing, accessible, non-overlapping directories. Share root paths are normalized and host symlinks resolved; file operations inside a share still prohibit following symlinks. `readOnly` is an additional application-level restriction and cannot grant permissions the operating system does not provide. Use read-only mounts or ACLs for operating-system-level read-only protection. Being able to browse `/` in the directory picker does not mean it can be shared: broad ancestor directories covering private state or password files cannot be added as shares.
-
-The persistent state directory is specified by `ConfigPath` in environment-variable mode or JSON `stateDir` in file mode. It has mode `0700`, must be owned by the runtime UID, must not overlap any share, and must not be placed in a temporary directory or deleted as part of deployment. Its `state.sqlite` stores settings, shares, tasks, sessions, and recycle-bin metadata; it is not the startup JSON file. Sharing an entire home directory may be rejected because it contains state or passwords; choose specific data subdirectories instead. Administrators must also keep configuration files containing inline passwords outside shares.
-
-### Initial import and share management
-
-`shares` is imported only once, when the state database is first initialized. Initialization is recorded even if the list is initially empty. Later JSON changes, restarts, and NixOS generation rollbacks do not overwrite saved shares. Environment-variable mode offers no initial import setting. The optional JSON import format is shown below; it is normally unnecessary:
-
-```json
-[{"id":"documents","name":"文档","path":"/srv/documents","readOnly":false}]
-```
-
-Each entry requires `name` and `path`. Omit `id` to generate it automatically; `readOnly` defaults to `false`. Preserve the existing state database and share IDs to avoid breaking task and recycle-bin associations.
-
-After initialization, add, edit, and remove shares in **Settings → Share settings**; saved changes take effect immediately. Removing a share deletes only its configuration, not directory contents. While any file request (including uploads and downloads) is being processed, share changes temporarily return HTTP 409. A share also cannot be modified or removed while it has active background tasks. A nonempty recycle bin prevents changing the path or removing the share; restore or permanently delete its contents first. When a directory disappears, a mount is not ready, or permissions are insufficient, saved shares are retained and marked unavailable, never automatically deleted or migrated.
-
-## Docker / Compose
-
-The image uses a multi-stage Node.js 24 and Go 1.26 build. The final image contains Alpine, CA certificates, `su-exec`, a static Go binary, and the frontend; neither Node.js nor Go is needed at runtime. The entrypoint briefly runs as root to validate `PUID` / `PGID` (defaulting to `1000:1000` when unset), prepare the private state directory specified by `ConfigPath` (default `/var/lib/file-station`), and adjust ownership of that directory alone. It then drops privileges through `su-exec`. The Go service, now running as that non-root identity, sets its actual state directory's permissions to `0700`. **The application process always runs as non-root.** It does not recursively change existing state contents, let alone shared data. Choose an identity directly with `docker run -e PUID=… -e PGID=…`; Compose `user:` is unnecessary. The entrypoint requires a nonempty absolute `ConfigPath` whose directory itself is not a symlink, and also rejects paths resolving to the root directory `/`.
-
-The repository's `compose.yaml` publishes only to host `127.0.0.1:8080` by default and mounts `./state` at `${ConfigPath-/var/lib/file-station}` for persistence. The mount target stays in sync with the `ConfigPath` passed to the container. Compose secrets are no longer used. Its only environment variables are the following five. `PASSWORD` has no default password and may be empty in file mode; environment-variable mode checks for at least 6 bytes at startup:
-
-```yaml
-environment:
-  PUID: '${PUID-1000}'
-  PGID: '${PGID-1000}'
-  UMASK: '${UMASK-0022}'
-  PASSWORD: '${PASSWORD-}'
-  ConfigPath: '${ConfigPath-/var/lib/file-station}'
-```
-
-For a **fresh deployment**, prepare the following in Bash at the repository root:
-
-```sh
-# Use the current regular user, or specify another non-root UID/GID.
-export PUID="$(id -u)" PGID="$(id -g)" UMASK='0022' ConfigPath='/var/lib/file-station'
-read -rs -p 'Administrator password (at least 6 bytes; 12+ recommended): ' PASSWORD
-printf '\n'
-export PASSWORD
-mkdir -p state
-docker compose up -d --build
-unset PASSWORD
-```
-
-If you prefer to enter the password directly, create a private `.env` file (mode `0600`, never committed), then run `docker compose up -d --build`:
-
-```dotenv
-PUID=1000
-PGID=1000
-UMASK='0022'
-PASSWORD='replace-with-your-own-password-at-least-12-bytes'
-ConfigPath='/var/lib/file-station'
-```
-
-`PASSWORD` has no default; you must replace the example value. **If a password entered directly in Compose YAML contains `$`, write it as `$$`. In `.env`, enclose the password in single quotes to avoid variable interpolation.** Do not rely on YAML single quotes alone to prevent Compose interpolation, and never use a documentation example password as your real password.
-
-The recommended custom state path example is `ConfigPath=/config`: set `ConfigPath='/config'` in your private `.env`. Compose then mounts `./state` at `/config` (that is, `./state:/config`), and persistent state such as SQLite is stored directly in that directory. Do not enter `/config/config.json` or set `ConfigPath=''`.
-
-The entrypoint prepares only the state directory itself. **When changing UID/GID for existing data, administrators must first stop the service, make a backup, and safely migrate ownership of the private state directory and all existing contents while preserving permissions and contents.** Do not rely on recursive repair by the entrypoint. State must remain persistent: deleting or replacing the state database loses share settings, tasks, sessions, and recycle-bin associations. For rootless Docker or user namespace remapping, prepare permissions according to the host UID mapping.
-
-Compose does not set `user:` by default. It retains `cap_drop: [ALL]`, adds only `CHOWN`, `SETUID`, and `SETGID` for entrypoint directory preparation and privilege dropping, and keeps `no-new-privileges:true`. If you explicitly use a non-root `--user UID:GID`, unset `PUID` / `PGID` inherit the current identity instead of the root entrypoint's defaults. The entrypoint neither elevates privileges nor changes directory ownership; the state directory must already belong to the current identity, and the Go service still sets its permissions to `0700`. Explicit `PUID` / `PGID` values that differ from the current identity cause an error.
-
-Compose has **no shared-data mounts by default**. For example, uncomment and adjust the following as needed:
-
-```yaml
-volumes:
-  - './state:${ConfigPath-/var/lib/file-station}'
-  - /srv/documents:/mnt/documents
-  # - /srv/archive:/mnt/archive:ro
-```
-
-After recreating the container, add **`/mnt/documents`** manually in the UI, not the host path `/srv/documents`. A mount does not automatically become a share, and the container cannot browse host paths that have not been mounted into it. Host directory UID/GID ownership, ACLs, and read-only mounts still apply. Switching identities with `su-exec` clears supplementary groups; do not rely on Docker `group_add` / `--group-add` to retain access. Set primary-group permissions or ACLs for the actual process identity. Do not switch to root for convenience or recursively change ownership of existing shared data.
-
-You can also run without Compose (prepare `state` first; these commands read the password from the terminal, not Compose's `.env`):
-
-```sh
-mkdir -p state
-read -rs -p 'Administrator password (at least 6 bytes; 12+ recommended): ' PASSWORD
-printf '\n'
-export PASSWORD
-docker build -t file-station:local .
-docker run -d --name file-station \
-  --cap-drop ALL \
-  --cap-add CHOWN --cap-add SETUID --cap-add SETGID \
-  --security-opt no-new-privileges:true \
-  -p 127.0.0.1:8080:8080 \
-  -e PUID="${PUID-1000}" -e PGID="${PGID-1000}" \
-  -e UMASK='0022' -e PASSWORD -e ConfigPath=/var/lib/file-station \
-  --mount "type=bind,src=$PWD/state,dst=/var/lib/file-station" \
-  file-station:local
-unset PASSWORD
-```
-
-The image command is `-static /usr/share/file-station`. Environment-variable mode always listens on container `0.0.0.0:8080`, uses `ConfigPath` for state (default `/var/lib/file-station`), and starts with no shares; the host mapping remains limited to `127.0.0.1:8080`. If you change a direct `docker run` invocation to `-e ConfigPath=/config`, also change the state mount above to `-v "$PWD/state:/config"`. To expose the service beyond localhost, explicitly adjust the port mapping and firewall. Compose passes through only the five variables listed above, not other variables from the host shell or `.env` automatically.
-
-### Optional JSON file mode for Docker
-
-To customize the listener, enable secure cookies, or use a password file, mount a read-only JSON file and explicitly pass `-config`. A custom persistent state directory alone does not require switching modes; use `ConfigPath`. For example, create a private `config.json` (mode `0600`, outside shares) and enter your actual password directly:
-
-```json
-{
-  "ip": "0.0.0.0",
-  "port": 8080,
-  "stateDir": "/var/lib/file-station",
-  "password": "replace-with-your-own-long-password",
-  "umask": "0022",
-  "secureCookies": false,
-  "shares": []
-}
-```
-
-Make sure the runtime UID can read the file, then enable the optional configuration mount in Compose and set the full command (keep `-static` when overriding the image CMD):
-
-```yaml
-environment:
-  PUID: '${PUID-1000}'
-  PGID: '${PGID-1000}'
-  UMASK: '${UMASK-0022}'
-  PASSWORD: '${PASSWORD-}'
-  ConfigPath: '${ConfigPath-/var/lib/file-station}'
-volumes:
-  - './state:${ConfigPath-/var/lib/file-station}'
-  - ./config.json:/etc/file-station/config.json:ro
-command: ["-config", "/etc/file-station/config.json", "-static", "/usr/share/file-station"]
-```
-
-This JSON uses the default state directory, so keep `ConfigPath=/var/lib/file-station` (or leave it unset). If you switch to the recommended `ConfigPath=/config`, also change JSON `stateDir` to `/config`; Compose will mount `./state:/config` accordingly.
-
-For direct `docker run`, add `--mount "type=bind,src=$PWD/config.json,dst=/etc/file-station/config.json,readonly"` before the image name in the complete command above, and change the final image command to:
-
-```sh
-  file-station:local -config /etc/file-station/config.json -static /usr/share/file-station
-```
-
-You may instead use `passwordFile` in JSON in place of `password` and mount the corresponding password file read-only. It must be readable by the runtime UID and remain outside shares.
-
-In file mode, **Go configuration loading completely ignores `ConfigPath`, `PASSWORD`, and `UMASK`, regardless of whether they are empty or valid**; they cannot serve as JSON fallbacks. `PUID` / `PGID` still determine the container identity. However, the container entrypoint still validates `ConfigPath` and prepares the runtime state directory it specifies. It does not read JSON or change the preparation path based on `-config`. Normally, keep JSON `stateDir`, `ConfigPath`, and the persistent mount target aligned. If you intentionally use different paths, you must provide a persistent mount for JSON `stateDir` and prepare its directory and permissions yourself; the entrypoint will not prepare it. JSON must use container-side paths. In container file mode, explicitly set `ip: "0.0.0.0"`; otherwise, JSON's default `127.0.0.1` makes the service unreachable through port mappings. For HTTPS, set `secureCookies: true` in JSON. The static asset directory remains independently specified by an explicit `-static` argument.
-
-## GitHub Releases and binary installation
-
-Maintainers must set the same stable version in `internal/server/version.txt`, `web/package.json`, and `web/package-lock.json` (both the top-level and root-package versions), commit it, and merge it into `main`. Push a matching `vMAJOR.MINOR.PATCH` tag for that commit. For example, with version `1.0.0`:
-
-```sh
-git switch main
-git pull --ff-only
-git tag -a v1.0.0 -m "File Station v1.0.0"
-git push origin v1.0.0
-```
-
-`.github/workflows/release.yml` checks the stable tag format, matching versions, and that the commit is on the default branch. It builds and tests on native Linux amd64 and arm64 runners with Go 1.26 and Node.js 24. Prerelease tags such as `v1.0.0-rc.1` are not supported and will not publish.
-
-After both builds succeed, it generates release notes and publishes a GitHub Release containing `file-station-v1.0.0-linux-amd64.tar.gz`, `file-station-v1.0.0-linux-arm64.tar.gz`, and `SHA256SUMS`. Each archive has a matching top-level directory containing a static Go executable, `web/dist`, the license, and both READMEs; Nix is not required. Only after publication succeeds does it call the Cachix workflow to build and upload Nix packages from the same tagged commit. Ordinary pushes to `main` no longer automatically build the cache.
-
-Publication uses the automatic `GITHUB_TOKEN`; no personal access token is needed. Configure the repository variable `CACHIX_CACHE=cyl96-file-station` and secret `CACHIX_AUTH_TOKEN` with a per-cache write token. A build failure prevents release creation. An upload/publication failure may leave a draft; inspect and handle it before rerunning. Published releases are not overwritten and tags must not be moved; publish a new version for fixes. If only Cachix fails after publication, use **Re-run failed jobs** in Actions without publishing again. To build the default branch cache independently, manually run **Nix binary cache** on the default branch.
-
-Download the archive matching your architecture and `SHA256SUMS` from [Releases](https://github.com/CYL96/File-Station/releases). Verify and extract them in the download directory (amd64 `v1.0.0` example; `--ignore-missing` permits downloading only one architecture):
-
-```sh
-sha256sum --check --ignore-missing SHA256SUMS
-tar -xzf file-station-v1.0.0-linux-amd64.tar.gz
-cd file-station-v1.0.0-linux-amd64
-./file-station -config "$HOME/.config/file-station/config.json" -static ./web/dist
-```
-
-Prepare configuration, a private password, and a writable state directory as described above. Always run as a non-root user. When starting from another working directory, use an absolute path for `-static`. GitHub's automatically generated Source code archives are not binary installers. Nix clients should keep the official `https://cache.nixos.org` substituter alongside Cachix for shared dependencies.
-
-## Nix package and NixOS service
-
-```sh
-nix build path:.#file-station
-./result/bin/file-station -config "$HOME/.config/file-station/config.json"
-```
-
-`default` and `file-station` refer to the same package. The flake supports `x86_64-linux` and `aarch64-linux`. The package wrapper specifies the frontend automatically, so `-static` is unnecessary. The source input and homepage continue to use the actual repository address, `github:CYL96/NixOS-File-Station`.
-
-The NixOS module generates JSON and starts the service with `-config`, so it always uses file mode. The module configuration determines the listener, state, password, privacy metadata, and initial share import; `ConfigPath` / `PASSWORD` / `UMASK` cannot override them. The module always generates `umask: "0077"` and retains systemd `UMask=0077`; it provides no additional umask option.
-
-Add the input to your system flake and import the module. For an existing flake, merge the relevant parts:
-
-```nix
-{
-  inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    file-station.url = "github:CYL96/NixOS-File-Station";
-    file-station.inputs.nixpkgs.follows = "nixpkgs";
-  };
-
-  outputs = inputs@{ nixpkgs, ... }: {
-    nixosConfigurations.myhost = nixpkgs.lib.nixosSystem {
-      system = "x86_64-linux";
-      modules = [
-        ./configuration.nix
-        inputs.file-station.nixosModules.default
-        {
-          users.groups.documents = {};
-          # Pre-create only a new dedicated data directory; do not recursively change existing files.
-          systemd.tmpfiles.rules = [ "d /srv/documents 2770 root documents - -" ];
-          services.file-station = {
-            enable = true;
-            ip = "127.0.0.1";
-            port = 8080;
-            passwordFile = "/run/secrets/file-station-password";
-            stateDir = "/var/lib/file-station";
-            user = "file-station";
-            group = "file-station";
-            supplementaryGroups = [ "documents" ];
-            # shares defaults to {}; add /srv/documents manually after the first sign-in.
-          };
-        }
-      ];
-    };
-  };
-}
-```
-
-By default, the module creates a dedicated `file-station` system user and group automatically; it no longer depends on a login user named `nixos`. You can set `user` to an existing non-root user declared in `users.users`. The module does not change a custom account's primary group or login settings. `group` is customizable; the module creates that group, and existing group definitions can merge normally. `SupplementaryGroups` adds permissions only to the service process, without changing the account's global group memberships. For example:
-
-```nix
-services.file-station = {
-  user = "alice";       # users.users.alice is already declared in the system configuration
-  group = "file-data";  # The module creates this group; existing definitions can also merge
-  supplementaryGroups = [ "documents" ];
-};
-```
-
-Reusing an existing user shares its UID with its other processes and loses the isolation boundary of a dedicated user. When granting access to existing data, prefer targeted group permissions or ACLs; all parent directories must also be traversable. The module creates no default shares or home directory and does not recursively change shared directories. It creates the state directory with mode `0700`, adjusts ownership/group of private state contents to the selected user/group, and preserves existing state-file permissions.
-
-Before deployment, provide `passwordFile` using a secrets manager or administrator action. It can remain root:root with mode `0600`, and its parent directories may also be accessible only to root. systemd `LoadCredential` passes it to the service's private credential path. In the generated JSON, `passwordFile` points to that credential and `passwordSourceFile` records the original path, preventing UI shares from covering directories containing the password source. The original path is only share-protection metadata: the application does not read it or use it for authentication. Password contents are not written into generated JSON or the Nix store. **Use an absolute runtime path string, never a Nix path literal, `writeText`, or another mechanism that stores the password in a store file.**
-
-The module has removed directory-allowlist-based `ReadWritePaths`/`ReadOnlyPaths` and the `ProtectSystem`, `ProtectHome`, `PrivateTmp`, and `PrivateDevices` filesystem remapping. It no longer imposes a separate set of shared-path permissions. `RemoveIPC=false` prevents service shutdown from removing IPC objects used by other processes with the same user or group; this remains set even when using the default user with a custom shared group. Hardening such as blocking privilege escalation, an empty capability set, and kernel/control-group protections remains in place, and sensitive kernel interfaces remain protected. Access to ordinary data paths is determined by the service user's actual permissions. Shares added through the UI do not automatically create mount dependencies. Configure mounts and service startup order for network disks and similar storage at the system level, for example with `systemd.services.file-station.unitConfig.RequiresMountsFor = [ "/mnt/documents" ];`.
-
-An optional Nix initial import can be written as `shares.documents = { name = "文档"; path = "/srv/documents"; readOnly = false; };`. The attribute name is the stable share ID, and the same first-initialization-only import rule applies.
-
-```sh
-sudo nixos-rebuild switch --flake /path/to/system-flake#myhost
-systemctl status file-station
-journalctl -u file-station
-sudo systemctl restart file-station
-```
-
-## Migrating from the old name (breaking changes)
-
-The old `nixos-file-station` binary, flake package attribute, `services.nixos-file-station` options, and `nixos-file-station.service` have been removed. Use `file-station` / `services.file-station` / `file-station.service` instead; no compatibility aliases remain. `allowedRoots` has also been removed. Remove it from JSON/Nix configuration and grant access through service-account permissions, ACLs, and mount options instead.
-
-All old `FILE_STATION_*` environment variables have been removed without compatibility aliases. Docker now uses `PUID`, `PGID`, `UMASK`, `PASSWORD`, and `ConfigPath`, with the password supplied directly by default. Remove old Compose secret mounts or migrate them to JSON file mode selected explicitly with `-config`. `ConfigPath` denotes only the persistent state directory, no longer selects startup JSON, defaults to `/var/lib/file-station`, and cannot be empty. Specify the static directory only with `-static`, and move custom listener settings, secure cookies, and similar options into JSON.
-
-**Default permissions for ordinary newly created content are less restrictive**: local/JSON deployments default to `umask: "0022"`, producing `0644` files and `0755` directories instead of the previous `0640` / `0750`. To keep the previous local permissions, explicitly set `"umask": "0027"` in JSON; Docker environment-variable mode can use `UMASK='0027'`. Existing content permissions are not changed automatically. NixOS still uses a fixed `"0077"`.
-
-The default state path has changed from `/var/lib/nixos-file-station` to `/var/lib/file-station`. **During migration, stop the old service and make a backup, then explicitly set `services.file-station.stateDir = "/var/lib/nixos-file-station";` (set JSON `stateDir` in local file mode; set `ConfigPath` in Docker environment-variable mode; in Docker file mode, align `ConfigPath` with JSON `stateDir` and point the persistent mount target at that directory). Preserve the original SQLite database and all state files.** Alternatively, after stopping the service, migrate the entire state to the new path and correctly set ownership for the runtime UID/GID. Do not reset by deleting the state database. The Nix module adjusts the selected state path's ownership to the new service user/group. The Docker entrypoint adjusts only the state directory itself; administrators must safely migrate existing contents. Do not run old and new services against the same state database at the same time. Old bootstrap `shares` do not overwrite the database; existing shares remain and can be corrected in the UI if permissions change.
-
-The session cookie has changed from `nixos_file_station_session` to `file_station_session`. Old browser sessions are incompatible, so sign in again. Migrate custom overrides for the old unit, monitoring, and log commands as well. The repository remote URL has not changed.
-
-### Manually migrating an old user service
-
-The following applies only to the old `nixos-file-station.service` managed by `systemctl --user`, not to NixOS system-service migration. Use the original regular user throughout. First inspect the old unit's `ExecStart`, environment, and drop-ins, along with its actual configuration file, to identify the original `stateDir`, password source, and required startup options. Do not adopt a new default state directory merely because of the rename, and do not regenerate the password.
-
-1. **Build the new package before stopping the old service.** Run from the repository root to create the executable used by the unit below. If the build fails, leave the old service running and do not continue migration:
+1. **Obtain or successfully build the new version first, then stop the old service and back up** the entire state, shares and recycle bins, configuration, passwords, and unit/drop-ins. Keep backups outside state and all shares. Never run old and new services against the same state database concurrently.
+2. Explicitly retain the original state path (old default `/var/lib/nixos-file-station`, new default `/var/lib/file-station`): use JSON `stateDir`, Docker environment-variable `ConfigPath`, aligned configuration and mounts in container JSON mode, or NixOS `services.file-station.stateDir`. Alternatively, migrate all state while stopped and correctly adjust ownership. **Never delete and recreate the database.**
+3. Preserve the original password and necessary startup settings. Move old environment passwords into JSON `password` or `passwordFile`; retain systemd credentials and `passwordSourceFile` protection as needed. Use JSON for custom listeners and similar settings; select the frontend only with `-static`. New default `0022` is less restrictive: set `0027` for the old `0640/0750` permissions (Docker uses `UMASK`); NixOS remains `0077`.
+4. For NixOS, update the module name/options and rebuild. For old user services, first inspect the original setup with `systemctl --user cat nixos-file-station.service`. Before stopping the service in step 1, you can prepare the new package with `mkdir -p "$HOME/.local/state/file-station" && nix build path:.#default --out-link "$HOME/.local/state/file-station/current"`. After backing up, create `~/.config/systemd/user/file-station.service` (create its parent directory if necessary), retaining credentials, mount dependencies, and custom settings. Set `ExecStart` to `%h/.local/state/file-station/current/bin/file-station -config "/absolute/path/to/existing-config.json"`, replacing it with the real original configuration path and retaining the quotes; the Nix package needs no separate `-static`. Back up and merge any existing new unit/drop-ins rather than overwriting them. Then run in order:
 
    ```sh
-   systemctl --user cat nixos-file-station.service
-   mkdir -p "$HOME/.local/state/file-station"
-   nix build path:.#default --out-link "$HOME/.local/state/file-station/current"
-   ```
-
-2. Replace the three variables below with **actual absolute paths**, stop the old service, and back up the entire state, configuration, and old unit. The backup directory must be outside the state directory and all shares. If a share covers the entire home directory, do not put the backup in your home directory. Run these commands in order in the same shell:
-
-   ```sh
-   config_path='/absolute/path/to/existing-config.json'
-   state_dir='/absolute/path/to/existing-state'
-   backup_dir='/absolute/private/path/outside-shares/migration-backup'
-   umask 077
    systemctl --user stop nixos-file-station.service
-   mkdir -p "$backup_dir"
-   systemctl --user cat nixos-file-station.service > "$backup_dir/nixos-file-station.service.txt"
-   cp -a -- "$config_path" "$backup_dir/config.json"
-   cp -a -- "$state_dir" "$backup_dir/state"
-   ```
-
-   If the password comes from a separate file, also make a private backup of the actual password source file at `"$backup_dir/password"`, retaining its original file and permissions. If the unit provides the password through credentials or the environment, back up the corresponding source files and settings as well. The unit snapshot includes drop-in contents and must be kept private; also back up source files for custom drop-ins. Do not run other instances using this state directory while the service is stopped. Do not start the new service if the backup fails.
-
-3. Edit `"$config_path"`: remove unsupported `allowedRoots`, **explicitly preserve the original absolute `stateDir`**, and retain the existing password source and necessary settings such as the listener. Exactly one of JSON `password` / `passwordFile` must be nonempty. Selecting JSON ignores `PASSWORD`, and old `FILE_STATION_*` variables no longer apply either. If the old password exists only in the environment, securely migrate it to JSON `password` or a private file referenced by `passwordFile`, without changing the password contents. If using systemd credentials, retain the corresponding `LoadCredential` in the new unit and point JSON `passwordFile` to the actual credential path. Preserve any required `passwordSourceFile` privacy metadata. Do not delete SQLite or other state files or reset shares; existing shares are read from the original database.
-
-4. Create the new user unit. The template below sets `-config` to the actual `config_path` above rather than assuming configuration has moved to a new directory. Restore any necessary credentials, mount dependencies, and custom settings from the old unit. Do not keep the old binary name or startup path:
-
-   ```sh
-   mkdir -p "$HOME/.config/systemd/user"
-   cat > "$HOME/.config/systemd/user/file-station.service" <<EOF
-   [Unit]
-   Description=File Station
-
-   [Service]
-   ExecStart=%h/.local/state/file-station/current/bin/file-station -config "$config_path"
-   Restart=on-failure
-
-   [Install]
-   WantedBy=default.target
-   EOF
-   ```
-
-   If `file-station.service` or its drop-ins already exist, back them up, merge, and review first; do not overwrite them directly. The Nix package already specifies the static asset path, so the old `-static` path is unnecessary.
-
-5. Disable the old unit before reloading and enabling the new one. **Never allow the old and new services to access the same state directory concurrently**:
-
-   ```sh
    systemctl --user disable nixos-file-station.service
    systemctl --user daemon-reload
    systemctl --user enable --now file-station.service
    systemctl --user status file-station.service --no-pager
    ```
 
-   Sign in and confirm the original shares and settings remain. For troubleshooting, use `journalctl --user -u file-station.service`; do not reinitialize by deleting state. After migration, continue using `./test/update-service.sh` for subsequent updates.
+5. The session cookie has been renamed, so sign in again. Confirm the original shares, settings, and files remain, and migrate monitoring, log commands, and unit overrides. User-service logs are available with `journalctl --user -u file-station.service`. Subsequent updates can use the script if the service follows the path convention above.
 
-## HTTPS, reverse proxies, and firewalls
-
-For LAN deployments, an HTTPS reverse proxy is recommended. Set `secureCookies: true` in JSON, or `services.file-station.secureCookies = true` on NixOS. Docker must switch to JSON file mode for this setting; environment-variable mode does not offer it. Do not enable Secure over plain HTTP, or the browser will not send the session cookie.
-
-- Preserve the original Host at the proxy. The frontend and API must share an origin; do not split them across different domains or ports.
-- Background events use SSE. Disable proxy buffering for `/api/events` and configure a sufficiently long connection timeout.
-- Set upload size limits as needed.
-- The NixOS module does not open the firewall automatically. When using a proxy, open the HTTPS port. When listening directly on the LAN, open the service's TCP port as needed and restrict access to trusted clients.
-
-## File operation limits and backup safety
-
-- Application permission checks do not replace operating-system isolation. Grant the service account only necessary permissions; mount points and existing hard links may expose other data. The share root cannot be deleted, and files outside shares or in unavailable shares cannot be operated on. Internal `.webui-*` paths cannot be accessed through ordinary file APIs.
-- Symlinks within shares can be displayed but cannot be entered, downloaded, previewed, or copied. Moving, renaming, and recycle-bin operations act on the link itself. Only regular files and directories are handled, not special files.
-- Copying does not preserve Unix ownership, ACLs, extended attributes, hard-link relationships, or original timestamps. Same-name directories cannot be recursively overwritten. Ordinary new files use `0666 & ~umask` and new directories use `0777 & ~umask`, still subject to operating-system permission rules such as ACLs. The default `"0022"` yields `0644` / `0755`; `"0077"` yields `0600` / `0700`. This setting applies only to ordinary creation, uploads, and files/directories produced by copying. Internal state and staging remain private. Text saves, same-filesystem moves, and recycle-bin restores do not change the original content's permissions. NixOS always applies `umask: "0077"` and retains `UMask=0077`.
-- Uploads and copies use hidden temporary files in the destination directory and do not silently overwrite. Cancellation does not roll back completed items. Abnormal interruption may leave temporary files behind; administrators should clean them up only after confirming that no tasks remain.
-- Text editing is limited to existing regular UTF-8 files of up to 1 MiB without NUL bytes. Files cannot be saved in read-only shares or the recycle bin, or if they are symlinks, lack write permission, or have multiple hard links. Saving must preserve permissions, ownership/group, ACLs, and extended attributes; it is rejected if they cannot all be preserved. Atomic replacement changes the inode and original timestamps.
-- Text saves check the version that was read, retaining the draft and reporting a conflict if external changes are detected, without a force-overwrite option. External writes can still occur between the check and replacement: **this is not filesystem-level CAS**. Files with uniformly CRLF line endings retain CRLF; other line endings are normalized to LF after editing.
-- Same-filesystem moves are atomic renames. Cross-filesystem moves copy first, then delete, and **are not an overall transaction**. Both source and destination may exist after a failure.
-- Background task success/failure states are persisted. Unfinished tasks are marked interrupted on restart and are not automatically replayed.
-- The recycle bin is stored in `.webui-trash` under the share root and uses space on the same filesystem. Its metadata is in `stateDir`. **The recycle bin is not a backup.** Stop the service and other writers, then consistently back up shared files, the hidden recycle bin, and the state database together.
-- Text is not executed as a web page. Markdown previews do not execute raw HTML, and external images are not loaded automatically. Session cookies use HttpOnly and SameSite=Strict; enable Secure for HTTPS.
-- **Rolling back a NixOS generation does not roll back file deletions, overwrites, or database changes.**
+Maintainer release guide: [RELEASING.md](https://github.com/CYL96/File-Station/blob/main/RELEASING.md).
