@@ -58,6 +58,8 @@ GitHub Release 使用 Actions 自动提供的 `GITHUB_TOKEN`，不需要另外�
 
 每个压缩包有同名顶级目录，包含静态 Go 二进制 `file-station`、`web/dist`、`LICENSE`、`README.md` 和 `README.en.md`，用户运行不依赖 Nix。压缩包由 [`scripts/package-release.sh`](scripts/package-release.sh)生成。GitHub 自动生成的 Source code 附件不是二进制安装包。
 
+容器镜像在各架构构建并加载后、推送 GHCR 前运行 [`scripts/smoke-image.sh`](scripts/smoke-image.sh)。可在有 Docker 的环境中执行 `bash scripts/smoke-image.sh IMAGE [EXPECTED_VERSION]`，将 `IMAGE` 替换为待检查镜像，并按需提供预期版本号。首页引用的 JavaScript 资源必须请求成功、正文非空，且响应 `Content-Type` 为 `text/javascript` 或 `application/javascript`（允许附带 charset 等参数）；不能按正文是否包含 `<html` 判断 SPA 回退，因为合法依赖也可能包含 HTML 模板。
+
 普通分支推送不会触发此发布链路；仅在网页创建 Release 也不会调用后续缓存工作流。
 
 ## 失败恢复与标签约束
