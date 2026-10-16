@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { ApiError, apiURL, preview } from './api';
-import type { Entry } from './api';
+import type { DateFormat, Entry } from './api';
 import { Markdown, isMarkdown } from './Markdown';
 import { ImagePreview } from './ImagePreview';
 import { VideoPreview } from './VideoPreview';
 import { useFileDialogWidth } from './useFileDialogWidth';
 import type { FileDialogKind } from './useFileDialogWidth';
+import { formatDate } from './dateFormat';
 
 export type IconName = 'folder' | 'file' | 'image' | 'video' | 'trash' | 'upload' | 'download' | 'plus' | 'search' | 'chevron' | 'refresh' | 'copy' | 'move' | 'edit' | 'close' | 'tasks' | 'check' | 'logout' | 'menu' | 'grid' | 'list' | 'restore' | 'eye' | 'lock' | 'help' | 'server' | 'arrow' | 'warning' | 'settings';
 const shapes: Record<IconName, ReactNode> = {
@@ -70,7 +71,7 @@ export function Modal({ title, children, onClose, wide = false, headerContent, f
     {children}
   </dialog>;
 }
-export function Preview({ share, entry, onClose, onEdit }: { share: string; entry: Entry; onClose: () => void; onEdit?: () => void }) {
+export function Preview({ share, entry, dateFormat, onClose, onEdit }: { share: string; entry: Entry; dateFormat: DateFormat; onClose: () => void; onEdit?: () => void }) {
   const [content, setContent] = useState<{ url?: string; videoURL?: string; text?: string; error?: string }>({});
   useEffect(() => {
     setContent({});
@@ -102,7 +103,7 @@ export function Preview({ share, entry, onClose, onEdit }: { share: string; entr
         : content.text !== undefined ? isMarkdown(entry.name) ? <Markdown text={content.text} share={share} path={entry.path} /> : <pre className="preview-text">{content.text}</pre>
         : <div className="loading-state" role="status"><span className="spinner" />正在加载预览…</div>}
     </div>
-    <footer className="modal-actions preview-footer"><span>{formatBytes(entry.size)} · {formatDate(entry.modified)}</span><span className="preview-resize-help">拖动右下角可调整宽度</span></footer>
+    <footer className="modal-actions preview-footer"><span>{formatBytes(entry.size)} · {formatDate(entry.modified, dateFormat)}</span><span className="preview-resize-help">拖动右下角可调整宽度</span></footer>
   </Modal>;
 }
 export function formatBytes(value: number) {
@@ -110,10 +111,6 @@ export function formatBytes(value: number) {
   const units = ['KiB', 'MiB', 'GiB', 'TiB'];
   const index = Math.min(Math.floor(Math.log(value) / Math.log(1024)) - 1, units.length - 1);
   return `${(value / 1024 ** (index + 1)).toLocaleString('zh-CN', { maximumFractionDigits: 1 })} ${units[index]}`;
-}
-export function formatDate(value: string) {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? '—' : date.toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false });
 }
 export function fileIcon(entry: { name?: string; path?: string; isDir: boolean }): IconName {
   if (entry.isDir) return 'folder';

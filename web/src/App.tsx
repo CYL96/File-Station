@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, MouseEvent } from 'react';
 import { ApiError, apiURL, configureSession, request, upload } from './api';
-import type { Conflict, Entry, FileColumnKey, FileSettings, FileSort, Operation, Session, Share, ShareSettingsChange, Task, TrashEntry } from './api';
+import type { Conflict, Entry, FileColumnKey, FileSettings, FileSort, GeneralSettings, Operation, Session, Share, ShareSettingsChange, Task, TrashEntry } from './api';
 import { DestinationDialog, Login, NameDialog } from './dialogs';
-import { Icon, ImageThumbnail, Modal, Preview, fileIcon, formatBytes, formatDate } from './ui';
+import { Icon, ImageThumbnail, Modal, Preview, fileIcon, formatBytes } from './ui';
 import type { IconName } from './ui';
 import { DirectoryTree } from './DirectoryTree';
 import { Settings } from './Settings';
@@ -13,6 +13,7 @@ import { GridSortMenu } from './GridSortMenu';
 import { FileSizeDialog } from './FileSizeDialog';
 import type { SizeSelection } from './FileSizeDialog';
 import { TextEditor } from './TextEditor';
+import { defaultGeneralSettings, formatDate } from './dateFormat';
 
 type Item = Entry & { trashId?: string; deletedAt?: string };
 type View = { share: string; path: string; trash: boolean };
@@ -40,6 +41,9 @@ export default function App() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [filter, setFilter] = useState('');
   const [fileSettings, setFileSettings] = useState<FileSettings>(defaultFileSettings);
+  const [generalSettings, setGeneralSettings] = useState<GeneralSettings>(defaultGeneralSettings);
+  const [generalLoading, setGeneralLoading] = useState(true);
+  const [generalError, setGeneralError] = useState('');
   const showHidden = fileSettings.showHidden;
   const [sort, setSort] = useState<FileSort>(defaultFileSettings.sort);
   const [layout, setLayout] = useState<'list' | 'grid'>('list');
@@ -89,6 +93,7 @@ export default function App() {
     configureSession(null, clearAuth);
     setSession(null); setShares([]); setEntries([]); setTasks([]); setUploads([]); setModal(null); setDrawer(false); setSelected(new Set()); setClipboard(null); setContextMenu(null);
     setFileSettings(defaultFileSettings); setSort(defaultFileSettings.sort);
+    setGeneralSettings(defaultGeneralSettings); setGeneralLoading(true); setGeneralError('');
     setSizeSelection(null);
     setClearingTasks(false);
     pendingRetries.current.clear(); setRetryingTasks(new Set());
@@ -113,6 +118,13 @@ export default function App() {
     } catch (error) {
       if (epoch === authEpoch.current) notify(error instanceof Error ? error.message : '保存文件视图设置失败', true);
     } finally { settingsWriting.current = false; setSettingsBusy(false); }
+  }
+  async function saveGeneralSettings(next: GeneralSettings, signal: AbortSignal) {
+    const epoch = authEpoch.current;
+    const saved = await request<GeneralSettings>('settings/general/save', next, undefined, signal);
+    if (signal.aborted || epoch !== authEpoch.current) return null;
+    setGeneralSettings(saved); setGeneralError('');
+    return saved;
   }
   async function reorderColumn(source: FileColumnKey, target: FileColumnKey, after: boolean) {
     if (settingsWriting.current || source === target) return;
@@ -146,6 +158,21 @@ export default function App() {
     request<FileSettings>('settings/files', undefined, undefined, controller.signal).then(data => {
       if (!controller.signal.aborted) { setFileSettings(data); setSort(data.sort); }
     }).catch(error => { if (!controller.signal.aborted) notify(error instanceof Error ? error.message : '读取高级设置失败', true); });
+    return () => controller.abort();
+  }, [session]);
+  useEffect(() => {
+    if (!session) return;
+    const controller = new AbortController();
+    const epoch = authEpoch.current;
+    setGeneralLoading(true); setGeneralError('');
+    request<GeneralSettings>('settings/general', undefined, undefined, controller.signal).then(data => {
+      if (!controller.signal.aborted && epoch === authEpoch.current) setGeneralSettings(data);
+    }).catch(error => {
+      if (!controller.signal.aborted && epoch === authEpoch.current) {
+        const message = error instanceof Error ? error.message : '读取通用设置失败';
+        setGeneralError(message); notify(message, true);
+      }
+    }).finally(() => { if (!controller.signal.aborted && epoch === authEpoch.current) setGeneralLoading(false); });
     return () => controller.abort();
   }, [session]);
   useEffect(() => {
@@ -210,8 +237,8 @@ export default function App() {
     switch (key) {
       case 'name': return entry.name;
       case 'size': return entry.isDir ? '—' : formatBytes(entry.size);
-      case 'modified': return formatDate(entry.modified);
-      case 'created': return entry.created ? formatDate(entry.created) : '—';
+      case 'modified': return formatDate(entry.modified, generalSettings.dateFormat);
+      case 'created': return entry.created ? formatDate(entry.created, generalSettings.dateFormat) : '—';
       case 'type': return typeLabel(entry);
       default: return entry[key] || '—';
     }
@@ -581,14 +608,14 @@ export default function App() {
         </div>
       </aside>
     </>}
-    {modal?.kind === 'settings' && <Settings onClose={() => setModal(null)} onChanged={refreshShares} />}
+    {modal?.kind === 'settings' && <Settings generalSettings={generalSettings} generalLoading={generalLoading} generalError={generalError} onSaveGeneral={saveGeneralSettings} onClose={() => setModal(null)} onChanged={refreshShares} />}
     {modal?.kind === 'advanced' && <AdvancedSettings value={fileSettings} onClose={() => setModal(null)} onSaved={data => { setFileSettings(data); setSelected(new Set()); anchor.current = null; setContextMenu(null); setModal(null); notify('高级设置已保存'); }} />}
     {modal?.kind === 'edit' && <TextEditor share={modal.share} path={modal.entry.path} name={modal.entry.name} onClose={() => setModal(null)} onSaved={() => setRefresh(value => value + 1)} />}
     {modal?.kind === 'mkdir' && !conflict && <NameDialog title="新建文件夹" label="文件夹名称" initialName="" onClose={() => setModal(null)} onSubmit={async name => { await request('mkdir', { share: view.share, path: view.path, name }); setModal(null); setRefresh(value => value + 1); notify('文件夹已创建'); }} />}
     {modal?.kind === 'rename' && !conflict && <NameDialog title="重命名" label="新名称" initialName={modal.entry.name} onClose={() => setModal(null)} onSubmit={async name => { const entry = modal.entry; setModal(null); try { if (await withConflict(policy => request('rename', { share: view.share, path: entry.path, name, conflict: policy }), `重命名为「${name}」时发生冲突`)) { setRefresh(value => value + 1); notify('重命名已处理'); } } catch (error) { notify(error instanceof Error ? error.message : '重命名失败', true); } }} />}
     {modal?.kind === 'destination' && !conflict && <DestinationDialog shares={shares} initialShare={view.share} initialPath={view.path} count={modal.operation.paths.length} kind={modal.operation.kind as 'copy' | 'move'} onClose={() => setModal(null)} onConfirm={async (destinationShare, destinationPath) => { const operation = modal.operation; setModal(null); try { await startOperation({ ...operation, destinationShare, destination: destinationPath }); } catch (error) { notify(error instanceof Error ? error.message : '操作失败', true); } }} />}
     {modal?.kind === 'delete' && !conflict && <Modal title={modal.permanent ? '永久删除文件' : '移至回收站'} onClose={() => { if (!actionBusy) setModal(null); }}><div className="modal-body"><div className={`delete-illustration ${modal.permanent ? 'permanent' : ''}`}><Icon name="trash" size={30} /></div><h3 className="confirm-title">{modal.permanent ? `永久删除 ${modal.items.length} 个项目？` : `将 ${modal.items.length} 个项目移至回收站？`}</h3><p className="confirm-description">{modal.permanent ? '此操作不可撤销，文件与文件夹中的所有内容将永久删除。' : '文件将从当前位置移除，您可以稍后在回收站恢复。'}</p><ul className="delete-items">{modal.items.slice(0, 5).map(item => <li key={item.trashId ?? item.path}><Icon name={fileIcon(item)} size={16} /><span>{item.name}</span></li>)}{modal.items.length > 5 && <li>以及其他 {modal.items.length - 5} 个项目</li>}</ul></div><footer className="modal-actions"><button className="button" disabled={actionBusy} onClick={() => setModal(null)}>取消</button><button className={`button ${modal.permanent ? 'danger' : 'primary'}`} disabled={actionBusy} onClick={async () => { setActionBusy(true); try { if (modal.permanent) { for (const item of modal.items) await request('trash/delete', { share: view.share, id: item.trashId }); setRefresh(value => value + 1); notify('所选项目已永久删除'); } else await runOperation({ kind: 'trash', share: view.share, paths: modal.items.map(item => item.path), conflict: 'error' }); setModal(null); } catch (error) { notify(error instanceof Error ? error.message : '删除失败', true); setRefresh(value => value + 1); setModal(null); } finally { setActionBusy(false); } }}>{actionBusy ? '处理中…' : modal.permanent ? '永久删除' : '移至回收站'}</button></footer></Modal>}
-    {modal?.kind === 'preview' && !conflict && <Preview key={JSON.stringify([view.share, modal.entry.path])} share={view.share} entry={modal.entry} onClose={() => setModal(null)} onEdit={!readOnly && !view.trash && !modal.entry.isDir && !modal.entry.isSymlink ? () => setModal({ kind: 'edit', share: view.share, entry: modal.entry }) : undefined} />}
+    {modal?.kind === 'preview' && !conflict && <Preview key={JSON.stringify([view.share, modal.entry.path])} share={view.share} entry={modal.entry} dateFormat={generalSettings.dateFormat} onClose={() => setModal(null)} onEdit={!readOnly && !view.trash && !modal.entry.isDir && !modal.entry.isSymlink ? () => setModal({ kind: 'edit', share: view.share, entry: modal.entry }) : undefined} />}
     {modal?.kind === 'help' && !conflict && <Modal title="键盘快捷键" onClose={() => setModal(null)}><div className="modal-body"><p className="muted">在文件区域中使用。输入文字或打开对话框时不会触发。列标题获得焦点时，Alt + 左右键用于调整列顺序，不会后退或前进。</p><dl className="shortcuts">{[['选择全部', 'Ctrl / ⌘ + A'], ['筛选当前目录', 'Ctrl / ⌘ + F'], ['复制 / 剪切', 'Ctrl / ⌘ + C / X'], ['粘贴到当前目录', 'Ctrl / ⌘ + V'], ['重命名', 'F2'], ['移至回收站 / 永久删除', 'Delete'], ['打开所选项目', 'Enter'], ['后退', 'Alt + ←'], ['前进', 'Alt + →'], ['上一级目录', 'Alt + ↑'], ['清除选择 / 关闭任务中心', 'Esc'], ['连续选择', 'Shift + 点击'], ['多选', 'Ctrl / ⌘ + 点击']].map(([label, key]) => <div key={label}><dt>{label}</dt><dd><kbd>{key}</kbd></dd></div>)}</dl></div><footer className="modal-actions"><button className="button primary" onClick={() => setModal(null)}>知道了</button></footer></Modal>}
     {conflict && <Modal title={conflict.title} onClose={() => conflict.resolve(null)}><div className="modal-body"><div className="conflict-heading"><Icon name="warning" size={25} /><p>{conflict.description}</p></div><p className="muted">文件不会自动覆盖，请选择处理方式：</p><div className="conflict-options"><button onClick={() => conflict.resolve('skip')}><Icon name="chevron" /><span><strong>跳过同名项目</strong><small>保留目标中的文件，继续处理其他项目</small></span></button><button onClick={() => conflict.resolve('keep')}><Icon name="copy" /><span><strong>保留两者</strong><small>为新文件自动添加序号，保留原有文件</small></span></button><button className="replace-option" onClick={() => conflict.resolve('replace')}><Icon name="warning" /><span><strong>替换目标项目</strong><small>覆盖目标中的同名内容，此操作不可撤销</small></span></button></div></div><footer className="modal-actions"><button className="button" onClick={() => conflict.resolve(null)}>取消此次操作</button></footer></Modal>}
   </div>;

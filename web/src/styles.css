@@ -72,6 +72,14 @@
 .settings-category-heading{display:flex;align-items:center;flex-wrap:wrap;gap:12px;margin-bottom:20px;min-width:0}
 .settings-category-heading h3{margin:0;font-size:15px;font-weight:600;color:var(--ink);overflow-wrap:anywhere}
 .settings-back{flex-shrink:0;white-space:nowrap}
+.general-settings{max-width:560px;min-width:0}
+.general-settings fieldset{border:0;margin:0;padding:0;min-width:0}
+.general-settings .text-input{max-width:100%;min-width:0}
+.general-settings .field-help{font-size:12px;line-height:1.8;color:var(--muted);overflow-wrap:anywhere}
+.general-date-preview{margin:18px 0 0;padding:14px;border:1px solid var(--border);border-radius:7px;background:#f7fbff;font-size:12px;line-height:1.8;overflow-wrap:anywhere}
+.general-date-preview time{font-variant-numeric:tabular-nums}
+.general-settings .share-editor-actions{align-items:center;justify-content:space-between}
+.general-settings .share-editor-actions .field-help{margin:0}
 .share-settings-feedback{margin-bottom:16px;padding:12px 14px;border:1px solid #f0d8de;border-radius:7px;background:#fff8fa}
 .share-settings-feedback .form-error{margin:0 0 10px}
 .share-settings-success{display:flex;align-items:center;gap:8px;margin-bottom:16px;color:#378765;font-size:12px;line-height:1.7}
@@ -125,6 +133,7 @@
   .managed-share-list{max-height:270px;overflow:auto;overscroll-behavior:contain}
   .share-settings-editor .text-input{font-size:16px}
   .settings-directory-picker .text-input{font-size:16px}
+  .general-settings .text-input{font-size:16px}
   .share-path-input .text-input{flex-basis:100%}
   .share-path-input>.button{width:100%}
 }

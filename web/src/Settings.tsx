@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { ApiError, request } from './api';
-import type { ManagedShare, SettingsDirectories, ShareSettingsChange, ShareSettingsData } from './api';
+import type { DateFormat, GeneralSettings, ManagedShare, SettingsDirectories, ShareSettingsChange, ShareSettingsData } from './api';
 import { Icon, Modal } from './ui';
+import { formatDate } from './dateFormat';
 
 type ShareDraft = { id?: string; name: string; path: string; readOnly: boolean; originalPath?: string };
 function errorMessage(cause: unknown, fallback: string) {
@@ -10,8 +11,12 @@ function errorMessage(cause: unknown, fallback: string) {
   return cause instanceof ApiError && cause.status === 409 ? `${message} 请等待相关任务结束；如回收站仍有项目，请先恢复或清空后重试。` : message;
 }
 
-export function Settings({ onClose, onChanged }: { onClose: () => void; onChanged: (change: ShareSettingsChange) => Promise<void> }) {
-  const [category, setCategory] = useState<'shares' | null>(null);
+export function Settings({ generalSettings, generalLoading, generalError, onSaveGeneral, onClose, onChanged }: { generalSettings: GeneralSettings; generalLoading: boolean; generalError: string; onSaveGeneral: (settings: GeneralSettings, signal: AbortSignal) => Promise<GeneralSettings | null>; onClose: () => void; onChanged: (change: ShareSettingsChange) => Promise<void> }) {
+  const [category, setCategory] = useState<'general' | 'shares' | null>(null);
+  const [generalDraft, setGeneralDraft] = useState<GeneralSettings | null>(null);
+  const [generalSaveError, setGeneralSaveError] = useState('');
+  const [generalSuccess, setGeneralSuccess] = useState('');
+  const saveController = useRef<AbortController | null>(null);
   const [data, setData] = useState<ShareSettingsData | null>(null);
   const [loading, setLoading] = useState(true);
   const [draft, setDraft] = useState<ShareDraft | null>(null);
@@ -28,7 +33,7 @@ export function Settings({ onClose, onChanged }: { onClose: () => void; onChange
       .then(result => { if (!controller.signal.aborted) setData(result); })
       .catch(cause => { if (!controller.signal.aborted) setError(errorMessage(cause, '读取共享设置失败')); })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
-    return () => controller.abort();
+    return () => { controller.abort(); saveController.current?.abort(); };
   }, []);
 
   function edit(share?: ManagedShare) {
@@ -51,6 +56,24 @@ export function Settings({ onClose, onChanged }: { onClose: () => void; onChange
       setError(errorMessage(cause, '保存共享设置失败'));
     } finally { writing.current = false; setBusy(false); }
   }
+  async function saveGeneral() {
+    if (writing.current || generalLoading) return;
+    writing.current = true; setBusy(true); setGeneralSaveError(''); setGeneralSuccess('');
+    const controller = new AbortController();
+    saveController.current = controller;
+    try {
+      const saved = await onSaveGeneral(generalDraft ?? generalSettings, controller.signal);
+      if (!controller.signal.aborted && saved) {
+        setGeneralDraft(saved); setGeneralSuccess('通用设置已保存，日期显示已更新。');
+      }
+    } catch (cause) {
+      if (!controller.signal.aborted) setGeneralSaveError(cause instanceof Error ? cause.message : '保存通用设置失败');
+    } finally {
+      writing.current = false;
+      if (!controller.signal.aborted) setBusy(false);
+    }
+  }
+  const dateFormat = (generalDraft ?? generalSettings).dateFormat;
   const path = draft ? draft.path.replace(/\/+$/, '') || '/' : '';
   const invalid = !draft?.name.trim() || !draft.path.startsWith('/');
   return <><Modal title="设置" wide onClose={() => { if (!writing.current) onClose(); }}>
@@ -58,7 +81,12 @@ export function Settings({ onClose, onChanged }: { onClose: () => void; onChange
       {category === null ? <div className="settings-home">
         <p className="settings-home-description">选择设置分类，管理文件工作空间。</p>
         <div className="settings-categories">
-          <button type="button" className="settings-category-card" onClick={() => setCategory('shares')} autoFocus>
+          <button type="button" className="settings-category-card" onClick={() => setCategory('general')} autoFocus>
+            <span className="settings-category-icon"><Icon name="settings" size={24} /></span>
+            <span className="settings-category-copy"><strong>通用设置</strong><span>设置全站日期显示格式</span></span>
+            <Icon name="chevron" size={17} />
+          </button>
+          <button type="button" className="settings-category-card" onClick={() => setCategory('shares')}>
             <span className="settings-category-icon"><Icon name="folder" size={24} /></span>
             <span className="settings-category-copy"><strong>共享设置</strong><span>管理共享目录、访问权限</span></span>
             <Icon name="chevron" size={17} />
@@ -67,8 +95,28 @@ export function Settings({ onClose, onChanged }: { onClose: () => void; onChange
       </div> : <>
         <div className="settings-category-heading">
           <button type="button" className="button settings-back" disabled={busy} onClick={() => { if (!writing.current) { setPickerOpen(false); setCategory(null); } }} autoFocus><Icon name="arrow" size={16} />返回设置</button>
-          <h3>共享设置</h3>
+          <h3>{category === 'general' ? '通用设置' : '共享设置'}</h3>
         </div>
+        {category === 'general' ? <form className="general-settings" aria-busy={busy || generalLoading} onSubmit={event => { event.preventDefault(); void saveGeneral(); }}>
+          {generalLoading ? <div className="loading-state" role="status"><span className="spinner" />正在读取通用设置…</div> : <>
+            {generalError && <p className="form-error" role="alert">{generalError}。未能读取已保存的通用设置，当前以默认格式显示；保存将覆盖服务器中的通用设置。</p>}
+            {generalSaveError && <p className="form-error" role="alert">{generalSaveError}</p>}
+            {generalSuccess && <p className="share-settings-success" role="status"><Icon name="check" size={17} />{generalSuccess}</p>}
+            <fieldset disabled={busy}>
+              <label className="field-label" htmlFor="general-date-format">日期显示格式</label>
+              <select id="general-date-format" className="text-input" value={dateFormat} onChange={event => { setGeneralDraft({ dateFormat: event.target.value as DateFormat }); setGeneralSaveError(''); setGeneralSuccess(''); }} aria-describedby="general-date-help general-date-preview">
+                <option value="locale">默认格式（年/月/日 时:分）</option>
+                <option value="yyyy-MM-dd">年-月-日（yyyy-MM-dd HH:mm）</option>
+                <option value="yyyy/MM/dd">年/月/日（yyyy/MM/dd HH:mm）</option>
+                <option value="dd/MM/yyyy">日/月/年（dd/MM/yyyy HH:mm）</option>
+                <option value="MM/dd/yyyy">月/日/年（MM/dd/yyyy HH:mm）</option>
+              </select>
+              <p id="general-date-help" className="field-help">使用本地时区和 24 小时制，保留小时与分钟。保存后应用到文件修改、创建、回收站删除时间和预览中的日期。</p>
+              <p id="general-date-preview" className="general-date-preview" aria-live="polite">显示示例：<time>{formatDate(new Date(2026, 10, 23, 14, 5).toISOString(), dateFormat)}</time></p>
+            </fieldset>
+            <div className="share-editor-actions"><span className="field-help">选择后需保存才会生效。</span><button type="submit" className="button primary" disabled={busy}>{busy ? '正在保存…' : '保存通用设置'}</button></div>
+          </>}
+        </form> : <>
         <div className="share-settings-body" aria-busy={busy || loading}>
       {error && <div className="share-settings-feedback"><p className="form-error" role="alert">{error}</p>{!busy && <button className="button" onClick={async () => {
         if (writing.current) return;
@@ -99,6 +147,7 @@ export function Settings({ onClose, onChanged }: { onClose: () => void; onChange
         </div>
       </>}
         </div>
+        </>}
       </>}
     </div>
   </Modal>
