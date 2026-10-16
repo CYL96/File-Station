@@ -5,6 +5,7 @@ import { Icon, Modal } from './ui';
 
 export function Login({ onLogin, initialError }: { onLogin: (session: Session) => void; initialError: string }) {
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState(initialError);
   const [busy, setBusy] = useState(false);
   return <main className="login-screen"><div className="login-decoration" aria-hidden="true"><div className="orbit orbit-one" /><div className="orbit orbit-two" /></div><section className="login-card"><div className="brand-mark"><Icon name="folder" size={36} /></div><h1>File Station</h1><form onSubmit={async event => {
@@ -12,7 +13,7 @@ export function Login({ onLogin, initialError }: { onLogin: (session: Session) =
     try { await request('login', { password }); const session = await request<Session>('session'); onLogin(session); }
     catch (cause) { setError(cause instanceof ApiError ? cause.message : '无法连接服务器，请检查网络后重试'); }
     finally { setBusy(false); }
-  }}><label className="field-label" htmlFor="password">管理员密码</label><div className="password-field"><Icon name="lock" /><input id="password" type="password" autoComplete="current-password" required autoFocus value={password} onChange={event => setPassword(event.target.value)} placeholder="输入管理员密码" /></div>{error && <p className="form-error" role="alert">{error}</p>}<button className="button primary login-submit" disabled={busy || !password}>{busy ? <><span className="spinner" />正在登录…</> : <>安全登录<Icon name="chevron" size={18} /></>}</button></form></section></main>;
+  }}><div className="password-field"><Icon name="lock" /><input id="password" type={showPassword ? 'text' : 'password'} aria-label="密码" autoComplete="current-password" required autoFocus value={password} onChange={event => setPassword(event.target.value)} /><button type="button" className="icon-button password-toggle" aria-label={showPassword ? '隐藏密码' : '显示密码'} aria-pressed={showPassword} aria-controls="password" onClick={() => setShowPassword(visible => !visible)}><Icon name={showPassword ? 'eye-off' : 'eye'} /></button></div>{error && <p className="form-error" role="alert">{error}</p>}<button className="button primary login-submit" disabled={busy || !password}>{busy ? <><span className="spinner" />正在登录…</> : '登录'}</button></form></section></main>;
 }
 
 export function NameDialog({ title, initialName, label, onClose, onSubmit }: { title: string; initialName: string; label: string; onClose: () => void; onSubmit: (name: string) => Promise<void> }) {

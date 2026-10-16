@@ -19,6 +19,11 @@
 .button.icon-button.modal-close:hover:not(:disabled){background:#dcecff;border-color:#6f9fdc;color:#1b559d}
 .modal-heading .button{height:var(--button-height);min-height:var(--button-height);font-size:var(--button-font-size)}
 @media(max-width:680px){.topbar-right .topbar-button{padding:0 7px}.toolbar .selection-actions .button,.toolbar .selection-actions .toolbar-button{height:44px;min-height:44px;font-size:var(--button-font-size);padding-top:0;padding-bottom:0}}
+
+.password-field{padding-right:3px}
+.password-field input{min-width:0}
+.password-field .password-toggle{width:44px;height:44px;color:#8492a4}
+.login-submit{justify-content:center}
 .sidebar nav{overflow-y:auto;min-height:0}.directory-node-row{display:flex;align-items:center;border-radius:8px}.directory-node-row.selected{background:#eaf3ff;color:var(--blue)}.directory-node-row .share-button{flex:1;min-width:0;margin:0;padding:10px 8px;gap:8px}.directory-node-row .share-button span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.tree-toggle{width:20px;height:32px;flex-shrink:0;padding:0;color:var(--muted)}.tree-chevron{display:flex;justify-content:center;transition:transform .15s}.tree-chevron.expanded{transform:rotate(90deg)}.tree-note{font-size:11px;color:var(--muted);margin:5px 12px 9px 42px}
 
 /* Bound the flex chain so overflowing files and folders scroll, not stretch. */
