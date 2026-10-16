@@ -36,6 +36,13 @@ export const apiMessages: Record<string, string> = {
   '通用设置格式错误': 'Invalid general settings format',
   '已保存的通用设置无效': 'The saved general settings are invalid',
 
+  '创建更新检查请求失败': 'Failed to create the update check request',
+  '检查更新超时，请稍后重试': 'The update check timed out. Please try again later.',
+  '无法连接 GitHub 检查更新，请检查网络后重试': 'Unable to connect to GitHub to check for updates. Check your network connection and try again.',
+  'GitHub 请求次数已达上限，请稍后重试': 'The GitHub request limit has been reached. Please try again later.',
+  'GitHub 更新检查失败，请稍后重试': 'The GitHub update check failed. Please try again later.',
+  'GitHub 返回的发布信息无效': 'GitHub returned invalid release information',
+
   '文件视图设置格式错误': 'Invalid file view settings format',
   '读取文件视图设置失败': 'Failed to load file view settings',
   '已保存的文件视图设置无效': 'The saved file view settings are invalid',

@@ -328,6 +328,8 @@ func (s *Server) routes(static string) {
 	s.api("POST /api/settings/general/save", s.saveGeneralSettings)
 	s.api("GET /api/settings/files", s.fileSettings)
 	s.api("POST /api/settings/files/save", s.saveFileSettings)
+	s.api("GET /api/settings/about", s.aboutSettings)
+	s.api("GET /api/settings/update", updateSettings(releaseHTTPClient))
 	s.api("GET /api/settings/shares", s.sharedSettings)
 	s.api("GET /api/settings/directories", s.settingsDirectories)
 	s.api("POST /api/settings/shares/save", s.saveShare)

@@ -8,6 +8,7 @@ import type { IconName } from './ui';
 import { DirectoryTree } from './DirectoryTree';
 import { Settings } from './Settings';
 import { AdvancedSettings, defaultFileSettings } from './FileSettings';
+import { About } from './About';
 import { FileTableHeader } from './FileTableHeader';
 import { GridSortMenu } from './GridSortMenu';
 import { FileSizeDialog } from './FileSizeDialog';
@@ -18,7 +19,7 @@ import { LanguageSwitcher, useI18n } from './i18n';
 
 type Item = Entry & { trashId?: string; deletedAt?: string };
 type View = { share: string; path: string; trash: boolean };
-type ModalState = { kind: 'mkdir' } | { kind: 'rename'; entry: Item } | { kind: 'destination'; operation: Operation } | { kind: 'delete'; items: Item[]; permanent: boolean } | { kind: 'preview'; entry: Item } | { kind: 'edit'; share: string; entry: Item } | { kind: 'help' } | { kind: 'settings' } | { kind: 'advanced' };
+type ModalState = { kind: 'mkdir' } | { kind: 'rename'; entry: Item } | { kind: 'destination'; operation: Operation } | { kind: 'delete'; items: Item[]; permanent: boolean } | { kind: 'preview'; entry: Item } | { kind: 'edit'; share: string; entry: Item } | { kind: 'help' } | { kind: 'settings' } | { kind: 'advanced' } | { kind: 'about' };
 type UploadTask = { id: string; name: string; size: number; loaded: number; status: 'queued' | 'running' | 'done' | 'error' | 'cancelled' | 'skipped'; error?: string; controller: AbortController };
 type UploadSource = { file: File; share: string; path: string; conflict: Conflict };
 type ConflictPrompt = { title: string; description: string; resolve: (policy: Conflict | null) => void };
@@ -611,7 +612,8 @@ export default function App() {
       </aside>
     </>}
     {modal?.kind === 'settings' && <Settings generalSettings={generalSettings} generalLoading={generalLoading} generalError={generalError} onSaveGeneral={saveGeneralSettings} onClose={() => setModal(null)} onChanged={refreshShares} />}
-    {modal?.kind === 'advanced' && <AdvancedSettings value={fileSettings} onClose={() => setModal(null)} onSaved={data => { setFileSettings(data); setSelected(new Set()); anchor.current = null; setContextMenu(null); setModal(null); notify('高级设置已保存'); }} />}
+    {modal?.kind === 'advanced' && <AdvancedSettings value={fileSettings} onClose={() => setModal(null)} onAbout={() => setModal({ kind: 'about' })} onSaved={data => { setFileSettings(data); setSelected(new Set()); anchor.current = null; setContextMenu(null); setModal(null); notify('高级设置已保存'); }} />}
+    {modal?.kind === 'about' && <About onClose={() => setModal(null)} />}
     {modal?.kind === 'edit' && <TextEditor share={modal.share} path={modal.entry.path} name={modal.entry.name} onClose={() => setModal(null)} onSaved={() => setRefresh(value => value + 1)} />}
     {modal?.kind === 'mkdir' && !conflict && <NameDialog title={t('新建文件夹')} label="文件夹名称" initialName="" onClose={() => setModal(null)} onSubmit={async name => { await request('mkdir', { share: view.share, path: view.path, name }); setModal(null); setRefresh(value => value + 1); notify('文件夹已创建'); }} />}
     {modal?.kind === 'rename' && !conflict && <NameDialog title={t('重命名')} label="新名称" initialName={modal.entry.name} onClose={() => setModal(null)} onSubmit={async name => { const entry = modal.entry; setModal(null); try { if (await withConflict(policy => request('rename', { share: view.share, path: entry.path, name, conflict: policy }), `重命名为「${name}」时发生冲突`)) { setRefresh(value => value + 1); notify('重命名已处理'); } } catch (error) { notify(error instanceof Error ? error.message : '重命名失败', true); } }} />}
