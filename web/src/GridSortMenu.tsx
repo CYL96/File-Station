@@ -4,6 +4,7 @@ import type { KeyboardEvent } from 'react';
 import type { FileColumnKey, FileSort } from './api';
 import { columnLabels } from './FileSettings';
 import { Icon } from './ui';
+import { useI18n } from './i18n';
 
 const mainFields: FileColumnKey[] = ['name', 'modified', 'type'];
 const moreFields: FileColumnKey[] = ['size', 'extension', 'permissions', 'owner', 'group', 'created'];
@@ -11,6 +12,7 @@ const moreFields: FileColumnKey[] = ['size', 'extension', 'permissions', 'owner'
 export function GridSortMenu({ sort, trash, onChange }: {
   sort: FileSort; trash: boolean; onChange: (sort: FileSort) => void;
 }) {
+  const { t } = useI18n();
   const id = useId();
   const button = useRef<HTMLButtonElement>(null);
   const menu = useRef<HTMLDivElement>(null);
@@ -130,7 +132,7 @@ export function GridSortMenu({ sort, trash, onChange }: {
   function field(key: FileColumnKey, index: number) {
     const label = key === 'modified' ? trash ? '删除时间' : '修改日期' : key === 'type' && trash ? '原始位置' : columnLabels[key];
     return <button key={key} type="button" role="menuitemradio" aria-checked={sort.key === key} {...itemProps(index)} onClick={() => choose({ key, ascending: sort.ascending })}>
-      <span className="grid-sort-dot" aria-hidden="true">{sort.key === key ? '●' : ''}</span><span className="grid-sort-label">{label}</span>
+      <span className="grid-sort-dot" aria-hidden="true">{sort.key === key ? '●' : ''}</span><span className="grid-sort-label">{t(label)}</span>
     </button>;
   }
 
@@ -142,19 +144,19 @@ export function GridSortMenu({ sort, trash, onChange }: {
         if (!open) show(event.key === 'ArrowUp');
         else focusItem(event.key === 'ArrowUp' ? more ? moreFields.length : 5 : 0);
       } else if (event.key === 'Escape' && open) { event.preventDefault(); close(true); }
-    }}><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M8 4v16m-4-4 4 4 4-4M16 20V4m-4 4 4-4 4 4" /></svg>排序<Icon name="chevron" size={12} className="grid-sort-chevron" /></button>
+    }}><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M8 4v16m-4-4 4 4 4-4M16 20V4m-4 4 4-4 4 4" /></svg>{t('排序')}<Icon name="chevron" size={12} className="grid-sort-chevron" /></button>
     {open && createPortal(<div ref={menu} id={`${id}-menu`} className="context-menu grid-sort-menu" role="menu" aria-labelledby={`${id}-button`} onKeyDown={menuKeyDown} onBlur={event => {
       if (!event.currentTarget.contains(event.relatedTarget) && !button.current?.contains(event.relatedTarget)) close();
     }}>
       {more ? <>
-        <button type="button" role="menuitem" {...itemProps(0)} onClick={() => changePage(false)}><Icon name="chevron" size={14} className="grid-sort-back" /><span>返回</span></button>
+        <button type="button" role="menuitem" {...itemProps(0)} onClick={() => changePage(false)}><Icon name="chevron" size={14} className="grid-sort-back" /><span>{t('返回')}</span></button>
         <div className="menu-divider" role="separator" />
-        <div role="group" aria-label="更多排序字段">{moreFields.map((key, index) => field(key, index + 1))}</div>
+        <div role="group" aria-label={t('更多排序字段')}>{moreFields.map((key, index) => field(key, index + 1))}</div>
       </> : <>
-        <div role="group" aria-label="排序字段">{mainFields.map(field)}</div>
-        <button type="button" role="menuitem" {...itemProps(3)} aria-label={moreSelected ? `更多排序字段，当前按${columnLabels[sort.key]}排序` : '更多排序字段'} onClick={() => changePage(true)}><span className="grid-sort-dot" aria-hidden="true">{moreSelected ? '●' : ''}</span><span className="grid-sort-label">更多</span><Icon name="chevron" size={13} /></button>
+        <div role="group" aria-label={t('排序字段')}>{mainFields.map(field)}</div>
+        <button type="button" role="menuitem" {...itemProps(3)} aria-label={moreSelected ? t('更多排序字段，当前按{label}排序', { label: t(columnLabels[sort.key]) }) : t('更多排序字段')} onClick={() => changePage(true)}><span className="grid-sort-dot" aria-hidden="true">{moreSelected ? '●' : ''}</span><span className="grid-sort-label">{t('更多')}</span><Icon name="chevron" size={13} /></button>
         <div className="menu-divider" role="separator" />
-        <div role="group" aria-label="排序方向">{[true, false].map((ascending, index) => <button key={String(ascending)} type="button" role="menuitemradio" aria-checked={sort.ascending === ascending} {...itemProps(index + 4)} onClick={() => choose({ key: sort.key, ascending })}><span className="grid-sort-dot" aria-hidden="true">{sort.ascending === ascending ? '●' : ''}</span><span className="grid-sort-label">{ascending ? '递增' : '递减'}</span></button>)}</div>
+        <div role="group" aria-label={t('排序方向')}>{[true, false].map((ascending, index) => <button key={String(ascending)} type="button" role="menuitemradio" aria-checked={sort.ascending === ascending} {...itemProps(index + 4)} onClick={() => choose({ key: sort.key, ascending })}><span className="grid-sort-dot" aria-hidden="true">{sort.ascending === ascending ? '●' : ''}</span><span className="grid-sort-label">{t(ascending ? '递增' : '递减')}</span></button>)}</div>
       </>}
     </div>, document.body)}
   </>;

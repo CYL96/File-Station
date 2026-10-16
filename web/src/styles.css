@@ -290,3 +290,17 @@
 .grid-sort-back {
   transform: rotate(180deg);
 }
+
+.language-switcher{display:inline-flex;align-items:center;flex-shrink:0}
+.language-switcher select{min-height:34px;max-width:130px;padding:6px 8px;border:1px solid #dce4ee;background:#fff;color:var(--ink);font-size:12px;cursor:pointer}
+.desktop-topbar .language-switcher select{border-color:#ffffff30;background:#203e5b;color:#e1eaf4}
+.login-card>.language-switcher{margin-bottom:20px}
+@media(max-width:680px){
+  .desktop-brand{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .topbar-right{flex-shrink:0}
+  .desktop-topbar .language-switcher select{max-width:104px;padding:6px;font-size:11px}
+  .share-settings-entry>span{display:none}
+  .toolbar .selection-actions .toolbar-button{flex-shrink:0;min-width:max-content;padding-left:9px;padding-right:9px}
+  .task-statistics dt{white-space:normal;text-align:center}
+  .modal-actions{flex-wrap:wrap}
+}

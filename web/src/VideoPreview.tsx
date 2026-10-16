@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { ApiError, preview } from './api';
+import { useI18n } from './i18n';
 
 export function VideoPreview({ share, path, url, name }: { share: string; path: string; url: string; name: string }) {
+  const { t } = useI18n();
   const ref = useRef<HTMLVideoElement>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -42,8 +44,8 @@ export function VideoPreview({ share, path, url, name }: { share: string; path: 
   }, [share, path, url]);
 
   return <div className="video-preview">
-    {loading && <div className="loading-state video-preview-status" role="status"><span className="spinner" />正在加载视频信息…</div>}
-    {error && <p className="video-preview-error" role="alert">{error}</p>}
-    <div className="video-preview-stage"><video ref={ref} className="video-preview-player" controls playsInline preload="metadata" aria-label={name}>浏览器不支持视频播放，请下载文件查看。</video></div>
+    {loading && <div className="loading-state video-preview-status" role="status"><span className="spinner" />{t('正在加载视频信息…')}</div>}
+    {error && <p className="video-preview-error" role="alert">{t(error)}</p>}
+    <div className="video-preview-stage"><video ref={ref} className="video-preview-player" controls playsInline preload="metadata" aria-label={name}>{t('浏览器不支持视频播放，请下载文件查看。')}</video></div>
   </div>;
 }

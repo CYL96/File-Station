@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { PointerEvent } from 'react';
+import { useI18n } from './i18n';
 
 const MIN_ZOOM = 0.25;
 const MAX_ZOOM = 8;
@@ -38,6 +39,7 @@ function constrain(view: View): View {
 }
 
 export function ImagePreview({ url, name, onError }: { url: string; name: string; onError: () => void }) {
+  const { t } = useI18n();
   const viewportRef = useRef<HTMLDivElement>(null);
   const [view, setView] = useState<View>({ width: 0, height: 0, naturalWidth: 0, naturalHeight: 0, zoom: 1, x: 0, y: 0 });
   const viewRef = useRef(view);
@@ -115,11 +117,11 @@ export function ImagePreview({ url, name, onError }: { url: string; name: string
   const canPan = limits.x > 0 || limits.y > 0;
 
   return <div className="image-preview">
-    <div className="image-preview-toolbar" role="group" aria-label="图片缩放">
-      <button type="button" className="button" aria-label="缩小图片" disabled={!scale || view.zoom <= MIN_ZOOM} onClick={() => zoomTo(viewRef.current.zoom / ZOOM_STEP)}>−</button>
-      <button type="button" className="button" aria-label="适应窗口" disabled={!scale} onClick={() => updateView({ ...viewRef.current, zoom: 1, x: 0, y: 0 })}>适应窗口</button>
-      <button type="button" className="button" aria-label="放大图片" disabled={!scale || view.zoom >= MAX_ZOOM} onClick={() => zoomTo(viewRef.current.zoom * ZOOM_STEP)}>+</button>
-      <output className="image-preview-scale" aria-label="图片缩放比例">{scale ? `${Math.round(scale * 100)}%` : '—'}</output>
+    <div className="image-preview-toolbar" role="group" aria-label={t('图片缩放')}>
+      <button type="button" className="button" aria-label={t('缩小图片')} disabled={!scale || view.zoom <= MIN_ZOOM} onClick={() => zoomTo(viewRef.current.zoom / ZOOM_STEP)}>−</button>
+      <button type="button" className="button" aria-label={t('适应窗口')} disabled={!scale} onClick={() => updateView({ ...viewRef.current, zoom: 1, x: 0, y: 0 })}>{t('适应窗口')}</button>
+      <button type="button" className="button" aria-label={t('放大图片')} disabled={!scale || view.zoom >= MAX_ZOOM} onClick={() => zoomTo(viewRef.current.zoom * ZOOM_STEP)}>+</button>
+      <output className="image-preview-scale" aria-label={t('图片缩放比例')}>{scale ? `${Math.round(scale * 100)}%` : '—'}</output>
     </div>
     <div ref={viewportRef} className={`image-preview-viewport${canPan ? ' image-preview-pannable' : ''}${dragging ? ' image-preview-dragging' : ''}`} style={{ touchAction: canPan ? 'none' : 'auto' }} onPointerDown={startDrag} onPointerMove={moveDrag} onPointerUp={endDrag} onPointerCancel={endDrag} onLostPointerCapture={endDrag}>
       <div className="image-preview-layer" style={{ width: view.naturalWidth, height: view.naturalHeight, visibility: scale ? 'visible' : 'hidden', transform: `translate(-50%, -50%) translate(${view.x}px, ${view.y}px) scale(${scale})` }}>
