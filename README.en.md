@@ -307,7 +307,7 @@ Saving takes effect immediately. Removing a share does not delete files. Share c
 - Browse, search, sort, and select multiple items in list or grid view, then upload, download, create, rename, copy, move, or use the recycle bin. For conflicts, skip, replace files, or keep both; same-name directories are not recursively overwritten.
 - The task center shows progress and supports cancellation. Failed copy, move, and recycle-bin tasks can retry unfinished items while retaining old records. Upload retries work only on the current page: select files again after refresh or sign-out. Unfinished tasks are marked interrupted on restart and are not automatically replayed.
 - Configure the interface language, date format, and permission display format; display settings do not change file contents or actual permissions.
-- Images can be previewed; MP4/WebM use native browser playback without server-side transcoding. H.264 + AAC is recommended for MP4; actual support depends on the browser and operating system. Download unsupported files instead.
+- List and grid views load only image thumbnails with a maximum edge of 320 pixels; originals load only when opening a preview. GIF thumbnails show the static first frame. Images over 32 megapixels, damaged images, or images without a usable thumbnail show an icon without automatically downloading the original. MP4/WebM use native browser playback without server-side transcoding. H.264 + AAC is recommended for MP4; actual support depends on the browser and operating system. Download unsupported files instead.
 - Text and Markdown can be edited within the limits under [File operations and editing](#file-operations-and-editing).
 
 ## Security and limitations

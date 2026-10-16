@@ -62,6 +62,7 @@ type Server struct {
 	tasksMu            sync.Mutex
 	tasks              map[string]*Task
 	workers            sync.WaitGroup
+	thumbnails         thumbnailCache
 	loginMu            sync.Mutex
 	failures           int
 	blockedUntil       time.Time
@@ -311,6 +312,7 @@ func (s *Server) routes(static string) {
 	s.shareAPI("POST /api/upload", s.upload)
 	s.shareAPI("GET /api/download", s.download)
 	s.shareAPI("GET /api/preview", s.preview)
+	s.shareAPI("GET /api/thumbnail", s.thumbnail)
 	s.shareAPI("POST /api/operation", s.operation)
 	s.api("GET /api/tasks", s.getTasks)
 	s.api("POST /api/tasks/clear", s.clearTasks)
