@@ -300,6 +300,8 @@ Optional initial JSON import: `"shares": [{"id":"documents","name":"文档","pat
 2. In **Settings → Share settings**, add existing, accessible, non-overlapping directories. Docker requires container-side mount paths.
 3. Enable read-only access as needed. Shares cannot cover state or password paths. Browsing from `/` in the directory picker does not mean `/` can be shared; choose specific data subdirectories rather than the entire home directory.
 
+Use the shared-folder list’s move-up and move-down buttons to change the display order. The order is saved automatically, also applies to the left-hand share navigation, and survives page reloads and service restarts.
+
 Saving takes effect immediately. Removing a share does not delete files. Share changes return 409 while file requests are being processed; affected shares cannot be modified or removed while they have active tasks. A nonempty recycle bin prevents changing the path or removing a share. Missing directories, unavailable mounts, or insufficient permissions mark the share unavailable without automatically deleting its configuration.
 
 ### Common operations and interface settings
