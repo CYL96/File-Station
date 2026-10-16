@@ -33,6 +33,9 @@ export const apiMessages: Record<string, string> = {
   '回收站非空，请先恢复或永久删除后更改路径': 'The trash is not empty. Restore or permanently delete its items before changing the path.',
   '回收站非空，请先恢复或永久删除后移除共享': 'The trash is not empty. Restore or permanently delete its items before removing the share.',
 
+  '通用设置格式错误': 'Invalid general settings format',
+  '已保存的通用设置无效': 'The saved general settings are invalid',
+
   '文件视图设置格式错误': 'Invalid file view settings format',
   '读取文件视图设置失败': 'Failed to load file view settings',
   '已保存的文件视图设置无效': 'The saved file view settings are invalid',

@@ -9,7 +9,7 @@ export function DirectoryTree({ shares, currentShare, currentPath, trash, refres
   navigate: (share: string, path?: string) => void;
 }) {
   const { t } = useI18n();
-  return <nav aria-label={t('共享目录')}>{shares.length ? shares.map(share => <DirectoryNode key={share.id} share={share} path="" name={share.name} depth={0} currentShare={currentShare} currentPath={currentPath} trash={trash} refresh={refresh} showHidden={showHidden} navigate={navigate} />) : <p className="tree-note">{t('尚无共享目录，请在「共享设置」中手动添加。')}</p>}</nav>;
+  return <nav aria-label={t('共享目录')}>{shares.length ? shares.map(share => <DirectoryNode key={share.id} share={share} path="" name={share.name} depth={0} currentShare={currentShare} currentPath={currentPath} trash={trash} refresh={refresh} showHidden={showHidden} navigate={navigate} />) : <p className="tree-note">{t('尚无共享目录，请在「设置 → 共享设置」中手动添加。')}</p>}</nav>;
 }
 
 function DirectoryNode(props: { share: Share; path: string; name: string; depth: number; currentShare: string; currentPath: string; trash: boolean; refresh: number; showHidden: boolean; navigate: (share: string, path?: string) => void }) {

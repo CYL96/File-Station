@@ -324,6 +324,8 @@ func (s *Server) routes(static string) {
 	s.shareAPI("GET /api/trash", s.listTrash)
 	s.shareAPI("POST /api/trash/restore", s.restoreTrash)
 	s.shareAPI("POST /api/trash/delete", s.deleteTrash)
+	s.api("GET /api/settings/general", s.generalSettings)
+	s.api("POST /api/settings/general/save", s.saveGeneralSettings)
 	s.api("GET /api/settings/files", s.fileSettings)
 	s.api("POST /api/settings/files/save", s.saveFileSettings)
 	s.api("GET /api/settings/shares", s.sharedSettings)
