@@ -259,6 +259,34 @@ command: ["-config", "/etc/file-station/config.json", "-static", "/usr/share/fil
 
 选择文件模式后，**Go 配置加载完全忽略 `ConfigPath`、`PASSWORD` 与 `UMASK`，无论是否为空或有效**，不能作为 JSON 的回退；`PUID` / `PGID` 仍用于容器身份。但容器入口仍会校验 `ConfigPath` 并准备其指定的运行时状态目录，不读取 JSON 或根据 `-config` 改变准备路径。通常应让 JSON `stateDir`、`ConfigPath` 和持久挂载目标保持一致；若有意使用不同路径，管理员必须自行持久挂载并预备 JSON `stateDir` 的目录及权限，入口不会替它准备。JSON 必须使用容器内路径；容器文件模式须明确设置 `ip: "0.0.0.0"`，否则 JSON 默认 `127.0.0.1` 会导致端口映射无法访问服务。HTTPS 部署在 JSON 中设置 `secureCookies: true`；静态目录仍由显式 `-static` 参数独立指定。
 
+## GitHub Release 发布与安装
+
+维护者先将同一个正式版本写入 `internal/server/version.txt`、`web/package.json` 和 `web/package-lock.json`（顶层及根包版本），提交并合入 `main`，再为该提交推送 `vMAJOR.MINOR.PATCH` 标签。例如版本文件为 `1.0.0` 时：
+
+```sh
+git switch main
+git pull --ff-only
+git tag -a v1.0.0 -m "File Station v1.0.0"
+git push origin v1.0.0
+```
+
+`.github/workflows/release.yml` 自动校验标签格式、各版本一致性及提交已合入默认分支，使用 Go 1.26 / Node.js 24 构建和测试两个原生 Linux 架构。预发布标签（如 `v1.0.0-rc.1`）不支持，不会发布。
+
+构建全部成功后，自动生成更新说明并发布正式 GitHub Release，附件为 `file-station-v1.0.0-linux-amd64.tar.gz`、`file-station-v1.0.0-linux-arm64.tar.gz` 和 `SHA256SUMS`。每个压缩包包含同名顶级目录，内有静态 Go 二进制、`web/dist`、许可证及中英文说明，不依赖 Nix。Release 发布成功后才调用 Cachix 工作流，构建并上传同一标签提交的 Nix 包；普通 `main` 推送不再自动构建缓存。
+
+工作流使用自动提供的 `GITHUB_TOKEN` 发布 Release，无需新增个人访问令牌；Cachix 仍需下文的变量和密钥。发布前构建失败不会创建 Release；上传或发布失败时检查是否留有草稿，确认后处理再重跑。已正式发布的 Release 不会被工作流覆盖，标签不得移动；需要修复时发布新版本。若仅后续 Cachix 失败，在 Actions 中选择 **Re-run failed jobs**，无需重新发布 Release。
+
+用户从 [Releases](https://github.com/CYL96/File-Station/releases) 下载匹配架构的压缩包和 `SHA256SUMS`，在下载目录校验并解压（以下以 amd64 的 `v1.0.0` 为例；校验文件包含两个架构，`--ignore-missing` 允许只下载其中一个）：
+
+```sh
+sha256sum --check --ignore-missing SHA256SUMS
+tar -xzf file-station-v1.0.0-linux-amd64.tar.gz
+cd file-station-v1.0.0-linux-amd64
+./file-station -config "$HOME/.config/file-station/config.json" -static ./web/dist
+```
+
+先按前文准备配置、私有密码和可写状态目录，始终以非 root 用户运行。从其他工作目录启动时，将 `-static` 改为解压后 `web/dist` 的绝对路径。GitHub 自动附带的 Source code 压缩包不是二进制安装包。
+
 ## Nix 包与 NixOS 服务
 
 ```sh
@@ -336,14 +364,14 @@ sudo systemctl restart file-station
 
 ### Cachix 二进制缓存
 
-仓库的 `.github/workflows/nix-cache.yml` 在推送到 `main` 或手动运行时，分别用原生 Linux runner 构建 `x86_64-linux` 和 `aarch64-linux`，上传默认包及其运行时依赖闭包。仅修改根目录 Markdown（`*.md`）、`Dockerfile`、`docker-entrypoint.sh`、`compose.yaml` 或 `.dockerignore` 的推送不触发；混合提交包含其他文件变更时仍会触发。手动运行不受文件过滤影响，但也只允许默认分支，不能用此工作流给其他分支发布缓存。
+仓库的 `.github/workflows/nix-cache.yml` 由 Release 工作流在正式发布成功后调用，分别用原生 Linux runner 构建 `x86_64-linux` 和 `aarch64-linux`，上传该 Release 对应提交的默认包及运行时依赖。保留默认分支上的手动运行入口；普通分支推送、文档修改和单独创建网页 Release 都不会自动触发缓存，旧的 `push` 文件忽略规则不再需要。
 
 **仓库维护者首次设置：**
 
 1. 登录 [Cachix](https://app.cachix.org)，创建公共缓存，采用默认的 Cachix 托管签名。缓存名由你注册，不要求与仓库名一致。
 2. 在该缓存的设置中创建仅限此缓存的写入令牌，不要使用可访问整个账号的个人令牌。
 3. 打开 GitHub 仓库 **Settings → Secrets and variables → Actions**，在 **Variables** 添加 `CACHIX_CACHE`，值为实际缓存名；在 **Secrets** 添加 `CACHIX_AUTH_TOKEN`，值为写入令牌。令牌不要写入源码、Nix 配置或聊天记录；此工作流无需 `CACHIX_SIGNING_KEY`。
-4. 提交工作流到 `main` 后，在 **Actions → Nix binary cache → Run workflow** 选择默认分支运行。之后符合上述文件过滤条件的 `main` 推送会自动构建并上传。只有两个架构的构建和 Cachix 上传均成功，才算发布完成；缺少变量或令牌会明确失败。
+4. 将两个工作流提交到 `main` 后，按上文推送版本标签即可依次发布 Release 和二进制缓存。也可在 **Actions → Nix binary cache → Run workflow** 选择默认分支，仅构建当前默认分支的缓存。两个架构的构建和 Cachix 上传均成功，才算缓存发布完成；缺少变量或令牌会明确失败，但不会撤回已经发布的 Release。
 
 **NixOS 使用者配置：**
 
@@ -362,7 +390,7 @@ sudo systemctl restart file-station
 
 缓存按精确的 store 路径匹配，不按版本号匹配。上面的服务示例直接选择 `inputs.file-station.packages`，不覆盖该 input 的 `nixpkgs`，以匹配 CI 使用的 `flake.lock`；系统自己的 `nixpkgs` 仍可独立更新。如果添加 `file-station.inputs.nixpkgs.follows = "nixpkgs"`、使用模块默认的系统包集构建、修改源码或覆盖构建选项，可能无法命中缓存。使用方还需锁定到已完成上传的项目提交。
 
-文件过滤只控制自动触发，不改变 Nix 源码过滤：上述被忽略的文件仍进入当前 Go 包的源码哈希，因此仅修改这些文件的提交可能产生未上传的新 store 路径。需要缓存该提交时，可在默认分支手动运行工作流。
+非发布提交不保证已有对应缓存；需要缓存当前默认分支时，可手动运行 Nix binary cache。下载通用依赖仍需保留官方 `https://cache.nixos.org`，上面的 `extra-substituters` 不会替换默认官方缓存。
 
 可以先用 `nix build --dry-run github:CYL96/NixOS-File-Station#default` 查看需要下载或构建的路径；实际构建日志显示从你的 Cachix URL 复制路径，才证明命中了该缓存。缓存未命中时 Nix 会回退到本地构建，不代表缓存配置必然错误。
 
