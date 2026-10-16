@@ -268,7 +268,6 @@ NixOS 模块生成 JSON 并通过 `-config` 启动，因此始终使用文件模
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     file-station.url = "github:CYL96/NixOS-File-Station";
-    file-station.inputs.nixpkgs.follows = "nixpkgs";
   };
 
   outputs = inputs@{ nixpkgs, ... }: {
@@ -277,12 +276,14 @@ NixOS 模块生成 JSON 并通过 `-config` 启动，因此始终使用文件模
       modules = [
         ./configuration.nix
         inputs.file-station.nixosModules.default
-        {
+        ({ pkgs, ... }: {
           users.groups.documents = {};
           # 仅预建新的专用数据目录，不递归改动已有文件。
           systemd.tmpfiles.rules = [ "d /srv/documents 2770 root documents - -" ];
           services.file-station = {
             enable = true;
+            # 使用项目锁定的包，匹配 CI 发布的二进制缓存。
+            package = inputs.file-station.packages.${pkgs.stdenv.hostPlatform.system}.default;
             ip = "127.0.0.1";
             port = 8080;
             passwordFile = "/run/secrets/file-station-password";
@@ -292,7 +293,7 @@ NixOS 模块生成 JSON 并通过 `-config` 启动，因此始终使用文件模
             supplementaryGroups = [ "documents" ];
             # shares 默认 {}，首次登录后手动添加 /srv/documents。
           };
-        }
+        })
       ];
     };
   };
@@ -323,6 +324,40 @@ systemctl status file-station
 journalctl -u file-station
 sudo systemctl restart file-station
 ```
+
+### Cachix 二进制缓存
+
+仓库的 `.github/workflows/nix-cache.yml` 在推送到 `main` 或手动运行时，分别用原生 Linux runner 构建 `x86_64-linux` 和 `aarch64-linux`，上传默认包及其运行时依赖闭包。仅修改根目录 Markdown（`*.md`）、`Dockerfile`、`docker-entrypoint.sh`、`compose.yaml` 或 `.dockerignore` 的推送不触发；混合提交包含其他文件变更时仍会触发。手动运行不受文件过滤影响，但也只允许默认分支，不能用此工作流给其他分支发布缓存。
+
+**仓库维护者首次设置：**
+
+1. 登录 [Cachix](https://app.cachix.org)，创建公共缓存，采用默认的 Cachix 托管签名。缓存名由你注册，不要求与仓库名一致。
+2. 在该缓存的设置中创建仅限此缓存的写入令牌，不要使用可访问整个账号的个人令牌。
+3. 打开 GitHub 仓库 **Settings → Secrets and variables → Actions**，在 **Variables** 添加 `CACHIX_CACHE`，值为实际缓存名；在 **Secrets** 添加 `CACHIX_AUTH_TOKEN`，值为写入令牌。令牌不要写入源码、Nix 配置或聊天记录；此工作流无需 `CACHIX_SIGNING_KEY`。
+4. 提交工作流到 `main` 后，在 **Actions → Nix binary cache → Run workflow** 选择默认分支运行。之后符合上述文件过滤条件的 `main` 推送会自动构建并上传。只有两个架构的构建和 Cachix 上传均成功，才算发布完成；缺少变量或令牌会明确失败。
+
+**NixOS 使用者配置：**
+
+本项目的公共缓存为 [cyl96-file-station](https://app.cachix.org/cache/cyl96-file-station)。在 NixOS 系统配置中加入以下 URL 和公开签名公钥；公钥不是上传令牌。
+
+```nix
+{
+  nix.settings = {
+    extra-substituters = [ "https://cyl96-file-station.cachix.org" ];
+    extra-trusted-public-keys = [ "cyl96-file-station.cachix.org-1:DVc1WCQcvfD3w6trxmPHxDZRo49HxAnojhMoslE4Bio=" ];
+  };
+}
+```
+
+执行 `sudo nixos-rebuild switch --flake /path/to/system-flake#myhost` 应用配置。公共缓存的下载者不需要 `CACHIX_AUTH_TOKEN`；信任公钥意味着信任该缓存维护者提供的构建产物。
+
+缓存按精确的 store 路径匹配，不按版本号匹配。上面的服务示例直接选择 `inputs.file-station.packages`，不覆盖该 input 的 `nixpkgs`，以匹配 CI 使用的 `flake.lock`；系统自己的 `nixpkgs` 仍可独立更新。如果添加 `file-station.inputs.nixpkgs.follows = "nixpkgs"`、使用模块默认的系统包集构建、修改源码或覆盖构建选项，可能无法命中缓存。使用方还需锁定到已完成上传的项目提交。
+
+文件过滤只控制自动触发，不改变 Nix 源码过滤：上述被忽略的文件仍进入当前 Go 包的源码哈希，因此仅修改这些文件的提交可能产生未上传的新 store 路径。需要缓存该提交时，可在默认分支手动运行工作流。
+
+可以先用 `nix build --dry-run github:CYL96/NixOS-File-Station#default` 查看需要下载或构建的路径；实际构建日志显示从你的 Cachix URL 复制路径，才证明命中了该缓存。缓存未命中时 Nix 会回退到本地构建，不代表缓存配置必然错误。
+
+设置与权限说明见 [Cachix 入门文档](https://docs.cachix.org/getting-started.html)；工作流使用 [cachix-action](https://github.com/cachix/cachix-action)。
 
 ## 从旧名称迁移（破坏性变更）
 
