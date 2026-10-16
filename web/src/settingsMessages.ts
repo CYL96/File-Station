@@ -1,5 +1,10 @@
 export const settingsMessages: Record<string, string> = {
   '语言': 'Language',
+  '设置': 'Settings',
+  '打开设置': 'Open settings',
+  '选择设置分类，管理文件工作空间。': 'Choose a settings category to manage your file workspace.',
+  '管理共享目录、访问权限': 'Manage shared folders and access permissions',
+  '返回设置': 'Back to settings',
   '共享设置': 'Share settings',
   '读取共享设置失败': 'Failed to load share settings',
   '保存共享设置失败': 'Failed to save share settings',
