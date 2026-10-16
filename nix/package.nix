@@ -8,7 +8,7 @@
   makeWrapper,
 }:
 let
-  version = "1.0.0";
+  version = lib.strings.trim (builtins.readFile ../internal/server/version.txt);
   frontend = buildNpmPackage {
     pname = "file-station-frontend";
     inherit version;
