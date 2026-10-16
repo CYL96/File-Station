@@ -117,9 +117,12 @@ html=$(<"$tmp_dir/index.html")
 [[ $html == *'<title>File Station</title>'* && $html == *'<div id="root"></div>'* ]] || fail '首页未返回 File Station 的真实静态页面。'
 asset_pattern='src="(/assets/[^"[:space:]]+\.js)"'
 [[ $html =~ $asset_pattern ]] || fail '首页缺少构建后的 JavaScript 静态资源。'
-request "$tmp_dir/app.js" "${BASH_REMATCH[1]}"
+js_content_type=$(request "$tmp_dir/app.js" "${BASH_REMATCH[1]}" --write-out '%{content_type}')
 [[ -s $tmp_dir/app.js ]] || fail '首页 JavaScript 静态资源为空。'
-[[ $(<"$tmp_dir/app.js") != *'<html'* ]] || fail 'JavaScript 静态资源错误地返回了 HTML 页面。'
+case "${js_content_type%%;*}" in
+  text/javascript|application/javascript) ;;
+  *) fail "JavaScript 静态资源的 Content-Type 不正确：${js_content_type:-（缺失）}" ;;
+esac
 
 process_status=$(docker exec "$container" cat /proc/1/status) || fail '无法读取实际应用进程的身份。'
 uid_seen=0
