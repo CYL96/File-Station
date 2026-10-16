@@ -3,9 +3,11 @@ import { ApiError, request } from './api';
 import { Icon, Modal, formatBytes } from './ui';
 import { Markdown, isMarkdown } from './Markdown';
 import { MarkdownVisualEditor } from './MarkdownVisualEditor';
+import { useI18n } from './i18n';
 
 type TextDocument = { content: string; version: string };
 export function TextEditor({ share, path, name, onClose, onSaved }: { share: string; path: string; name: string; onClose: () => void; onSaved: () => void }) {
+  const { locale, t } = useI18n();
   const [document, setDocument] = useState<TextDocument | null>(null);
   const [text, setText] = useState('');
   const [loading, setLoading] = useState(true);
@@ -96,28 +98,28 @@ export function TextEditor({ share, path, name, onClose, onSaved }: { share: str
       setConflict(cause instanceof ApiError && cause.status === 409);
     } finally { writing.current = false; setBusy(false); }
   }
-  return <Modal title={`编辑文件 · ${name}`} wide fileDialog={{ kind: 'editor', content: text, mode }} onClose={close} headerContent={<>
-    {markdown && !loading && document && <div className="markdown-modes" role="group" aria-label="Markdown 编辑模式">{([['source', '源代码编辑'], ['split', '对比编辑'], ['visual', '预览编辑']] as const).map(([value, label]) => <button key={value} className="button" aria-pressed={mode === value} disabled={busy} onClick={() => setMode(value)}>{label}</button>)}</div>}
-    <div className="editor-actions"><button className="button" disabled={busy || loading || !!confirm} onClick={reload}><Icon name="refresh" size={16} />重新读取</button><button className="button primary" disabled={!document || loading || busy || !dirty || tooLarge || conflict || !!confirm} onClick={() => { void save(); }}>{busy ? <span className="spinner" /> : <Icon name="check" size={16} />}保存修改</button></div>
+  return <Modal title={t('编辑文件 · {name}', { name })} wide fileDialog={{ kind: 'editor', content: text, mode }} onClose={close} headerContent={<>
+    {markdown && !loading && document && <div className="markdown-modes" role="group" aria-label={t('Markdown 编辑模式')}>{([['source', '源代码编辑'], ['split', '对比编辑'], ['visual', '预览编辑']] as const).map(([value, label]) => <button key={value} className="button" aria-pressed={mode === value} disabled={busy} onClick={() => setMode(value)}>{t(label)}</button>)}</div>}
+    <div className="editor-actions"><button className="button" disabled={busy || loading || !!confirm} onClick={reload}><Icon name="refresh" size={16} />{t('重新读取')}</button><button className="button primary" disabled={!document || loading || busy || !dirty || tooLarge || conflict || !!confirm} onClick={() => { void save(); }}>{busy ? <span className="spinner" /> : <Icon name="check" size={16} />}{t('保存修改')}</button></div>
   </>}><div className="text-editor-body" onKeyDown={event => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') { event.preventDefault(); void save(); } }}>
     <p className="field-help editor-path" title={path}>{path}</p>
-    <p className="editor-resize-help">拖动右下角可调整宽度{markdown && mode === 'split' ? ' · 源码与预览同步滚动' : ''}</p>
-    {loading ? <div className="loading-state" role="status"><span className="spinner" />正在读取文本…</div> : document && <>
-      {markdown && mode === 'visual' && <p className="field-help markdown-mode-help">直接编辑渲染内容；修改后会按 Markdown 重新序列化，可能规范化空格、列表及表格格式。需要逐字保留格式时使用源代码编辑。</p>}
+    <p className="editor-resize-help">{t('拖动右下角可调整宽度')}{markdown && mode === 'split' ? ` · ${t('源码与预览同步滚动')}` : ''}</p>
+    {loading ? <div className="loading-state" role="status"><span className="spinner" />{t('正在读取文本…')}</div> : document && <>
+      {markdown && mode === 'visual' && <p className="field-help markdown-mode-help">{t('直接编辑渲染内容；修改后会按 Markdown 重新序列化，可能规范化空格、列表及表格格式。需要逐字保留格式时使用源代码编辑。')}</p>}
       <div className={`editor-workspace ${markdown && mode === 'split' ? 'editor-split' : ''}`}>
-      {markdown && mode === 'visual' ? <MarkdownVisualEditor value={text} share={share} path={path} disabled={busy} onChange={value => { setText(value); setSaved(false); }} /> : <><label className="sr-only" htmlFor="file-editor-content">文件内容</label><textarea id="file-editor-content" ref={area} className="file-editor-content" value={text} disabled={busy} spellCheck={false} autoCapitalize="off" autoCorrect="off" wrap="off" onScroll={event => syncScroll(event.currentTarget)} onChange={event => { setText(event.target.value); setSaved(false); }} onKeyDown={event => {
+      {markdown && mode === 'visual' ? <MarkdownVisualEditor key={locale} value={text} share={share} path={path} disabled={busy} onChange={value => { setText(value); setSaved(false); }} /> : <><label className="sr-only" htmlFor="file-editor-content">{t('文件内容')}</label><textarea id="file-editor-content" ref={area} className="file-editor-content" value={text} disabled={busy} spellCheck={false} autoCapitalize="off" autoCorrect="off" wrap="off" onScroll={event => syncScroll(event.currentTarget)} onChange={event => { setText(event.target.value); setSaved(false); }} onKeyDown={event => {
         if (event.key === 'Tab' && !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey) {
           event.preventDefault(); const node = event.currentTarget; const start = node.selectionStart; const end = node.selectionEnd;
           setText(current => current.slice(0, start) + '\t' + current.slice(end)); setSaved(false);
           requestAnimationFrame(() => { area.current?.setSelectionRange(start + 1, start + 1); });
         }
-      }} />{markdown && mode === 'split' && <div ref={preview} className="editor-markdown-preview" aria-label="Markdown 实时预览" onScroll={event => syncScroll(event.currentTarget)}><Markdown text={text} share={share} path={path} /></div>}</>}
+      }} />{markdown && mode === 'split' && <div ref={preview} className="editor-markdown-preview" aria-label={t('Markdown 实时预览')} onScroll={event => syncScroll(event.currentTarget)}><Markdown text={text} share={share} path={path} /></div>}</>}
       </div>
-      <div className="editor-status"><span>UTF-8 · {crlf ? 'CRLF' : 'LF'} · {formatBytes(bytes)} / 1 MiB</span><span role="status">{busy ? '正在保存…' : saved ? '已保存' : dirty ? '未保存' : '未修改'}</span></div>
-      {tooLarge && <p className="form-error" role="alert">内容超过 1 MiB，缩短后才能保存。</p>}
+      <div className="editor-status"><span>UTF-8 · {crlf ? 'CRLF' : 'LF'} · {formatBytes(bytes)} / 1 MiB</span><span role="status">{t(busy ? '正在保存…' : saved ? '已保存' : dirty ? '未保存' : '未修改')}</span></div>
+      {tooLarge && <p className="form-error" role="alert">{t('内容超过 1 MiB，缩短后才能保存。')}</p>}
     </>}
-    {error && <p className="form-error" role="alert">{error}</p>}
-    {conflict && <p className="field-help">编辑内容仍保留。请复制需要保留的内容，再重新读取文件；不会强制覆盖外部修改。</p>}
-    {confirm && <div className="editor-discard" role="alert"><p>有未保存的修改，{confirm === 'close' ? '关闭' : '重新读取'}会丢弃这些修改。</p><div><button className="button" onClick={() => setConfirm(null)}>继续编辑</button><button className="button danger" onClick={() => { const action = confirm; setConfirm(null); if (action === 'close') onClose(); else { setDocument(null); setText(''); setRevision(value => value + 1); } }}>丢弃修改并{confirm === 'close' ? '关闭' : '重新读取'}</button></div></div>}
+    {error && <p className="form-error" role="alert">{t(error)}</p>}
+    {conflict && <p className="field-help">{t('编辑内容仍保留。请复制需要保留的内容，再重新读取文件；不会强制覆盖外部修改。')}</p>}
+    {confirm && <div className="editor-discard" role="alert"><p>{t(confirm === 'close' ? '有未保存的修改，关闭会丢弃这些修改。' : '有未保存的修改，重新读取会丢弃这些修改。')}</p><div><button className="button" onClick={() => setConfirm(null)}>{t('继续编辑')}</button><button className="button danger" onClick={() => { const action = confirm; setConfirm(null); if (action === 'close') onClose(); else { setDocument(null); setText(''); setRevision(value => value + 1); } }}>{t(confirm === 'close' ? '丢弃修改并关闭' : '丢弃修改并重新读取')}</button></div></div>}
   </div></Modal>;
 }

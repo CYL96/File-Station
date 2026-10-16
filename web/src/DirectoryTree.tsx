@@ -2,15 +2,18 @@ import { useEffect, useState } from 'react';
 import { request } from './api';
 import type { Entry, Share } from './api';
 import { Icon } from './ui';
+import { useI18n } from './i18n';
 
 export function DirectoryTree({ shares, currentShare, currentPath, trash, refresh, showHidden, navigate }: {
   shares: Share[]; currentShare: string; currentPath: string; trash: boolean; refresh: number; showHidden: boolean;
   navigate: (share: string, path?: string) => void;
 }) {
-  return <nav aria-label="共享目录">{shares.length ? shares.map(share => <DirectoryNode key={share.id} share={share} path="" name={share.name} depth={0} currentShare={currentShare} currentPath={currentPath} trash={trash} refresh={refresh} showHidden={showHidden} navigate={navigate} />) : <p className="tree-note">尚无共享目录，请在「设置 → 共享设置」中手动添加。</p>}</nav>;
+  const { t } = useI18n();
+  return <nav aria-label={t('共享目录')}>{shares.length ? shares.map(share => <DirectoryNode key={share.id} share={share} path="" name={share.name} depth={0} currentShare={currentShare} currentPath={currentPath} trash={trash} refresh={refresh} showHidden={showHidden} navigate={navigate} />) : <p className="tree-note">{t('尚无共享目录，请在「设置 → 共享设置」中手动添加。')}</p>}</nav>;
 }
 
 function DirectoryNode(props: { share: Share; path: string; name: string; depth: number; currentShare: string; currentPath: string; trash: boolean; refresh: number; showHidden: boolean; navigate: (share: string, path?: string) => void }) {
+  const { t } = useI18n();
   const { share, path, name, depth, currentShare, currentPath, trash, refresh, showHidden, navigate } = props;
   const active = share.id === currentShare && !trash;
   const ancestor = active && (path === '' || currentPath === path || currentPath.startsWith(path + '/'));
@@ -31,9 +34,9 @@ function DirectoryNode(props: { share: Share; path: string; name: string; depth:
   const visibleChildren = children.filter(child => showHidden || !child.name.startsWith('.'));
   return <div className="directory-node">
     <div className={`directory-node-row ${active && currentPath === path ? 'selected' : ''}`} style={{ paddingLeft: 10 + depth * 14 }}>
-      <button className="tree-toggle" aria-label={`${expanded ? '收起' : '展开'}${name}目录`} aria-expanded={expanded} onClick={() => setExpanded(value => !value)}><span className={expanded ? 'tree-chevron expanded' : 'tree-chevron'}><Icon name="chevron" size={13} /></span></button>
+      <button className="tree-toggle" aria-label={t(expanded ? '收起{name}目录' : '展开{name}目录', { name })} aria-expanded={expanded} onClick={() => setExpanded(value => !value)}><span className={expanded ? 'tree-chevron expanded' : 'tree-chevron'}><Icon name="chevron" size={13} /></span></button>
       <button className="share-button" onClick={() => navigate(share.id, path)}><Icon name="folder" size={17} /><span>{name}</span>{depth === 0 && share.readOnly && <Icon name="lock" size={13} />}</button>
     </div>
-    {expanded && <div className="directory-children">{loading ? <p className="tree-note" role="status">读取中…</p> : error ? <p className="tree-note" role="alert">{error}</p> : visibleChildren.length ? visibleChildren.map(child => <DirectoryNode key={child.path} {...props} path={child.path} name={child.name} depth={depth + 1} />) : <p className="tree-note">无子文件夹</p>}</div>}
+    {expanded && <div className="directory-children">{loading ? <p className="tree-note" role="status">{t('读取中…')}</p> : error ? <p className="tree-note" role="alert">{t(error)}</p> : visibleChildren.length ? visibleChildren.map(child => <DirectoryNode key={child.path} {...props} path={child.path} name={child.name} depth={depth + 1} />) : <p className="tree-note">{t('无子文件夹')}</p>}</div>}
   </div>;
 }

@@ -1,6 +1,7 @@
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { apiURL } from './api';
+import { useI18n } from './i18n';
 
 export function isMarkdown(name: string) {
   return /\.(md|markdown)$/i.test(name);
@@ -23,8 +24,9 @@ export function markdownImageURL(value: string, share: string, path: string) {
 }
 
 export function Markdown({ text, share, path }: { text: string; share: string; path: string }) {
+  const { t } = useI18n();
   return <div className="markdown-content"><ReactMarkdown remarkPlugins={[remarkGfm]} urlTransform={(url, key) => key === 'src' ? markdownImageURL(url, share, path) : defaultUrlTransform(url)} components={{
     a: ({ href, children }) => href && /^(https?:|mailto:|#)/i.test(href) ? <a href={href} target={href.startsWith('#') ? undefined : '_blank'} rel="noopener noreferrer">{children}</a> : <span>{children}</span>,
-    img: ({ src, alt }) => src ? <img src={src} alt={alt ?? ''} loading="lazy" /> : <span className="markdown-image-note">[图片：{alt || '外部或不支持的图片'}]</span>,
+    img: ({ src, alt }) => src ? <img src={src} alt={alt ?? ''} loading="lazy" /> : <span className="markdown-image-note">{t('[图片：{alt}]', { alt: alt || t('外部或不支持的图片') })}</span>
   }}>{text}</ReactMarkdown></div>;
 }

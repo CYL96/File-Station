@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import type { PointerEvent, ReactNode } from 'react';
 import type { FileColumnKey, FileSettings, FileSort } from './api';
 import { columnLabels } from './FileSettings';
+import { useI18n } from './i18n';
 
 type DropPosition = { key: FileColumnKey; after: boolean };
 type ColumnGeometry = { key: FileColumnKey; left: number; width: number; cells: HTMLElement[] };
@@ -12,6 +13,7 @@ export function FileTableHeader({ columns, layout, sort, trash, busy, selection,
   onSort: (key: FileColumnKey) => void;
   onReorder: (source: FileColumnKey, target: FileColumnKey, after: boolean) => Promise<void>;
 }) {
+  const { t } = useI18n();
   const gesture = useRef<{ key: FileColumnKey; x: number; pointer: number; moved: boolean; offset: number; scroll: number; geometry: ColumnGeometry[] } | null>(null);
   const suppressClick = useRef(0);
   const [source, setSource] = useState<FileColumnKey | null>(null);
@@ -79,7 +81,7 @@ export function FileTableHeader({ columns, layout, sort, trash, busy, selection,
     {layout === 'grid' ? <div role="columnheader" className="grid-sort-cell">{gridSort}</div> : columns.map(column => {
       const label = labels[column.key];
       return <div key={column.key} role="columnheader" data-column={column.key} aria-sort={sort.key === column.key ? sort.ascending ? 'ascending' : 'descending' : 'none'} className={`column-${column.key} draggable-column ${source === column.key ? 'column-drag-source' : ''} ${drop?.key === column.key ? drop.after ? 'column-drop-after' : 'column-drop-before' : ''}`}>
-        <button disabled={busy} title={`${label}：点击排序，左右拖动调整列顺序；Alt + 左右键也可移动`} onClick={event => {
+        <button disabled={busy} title={t('{label}：点击排序，左右拖动调整列顺序；Alt + 左右键也可移动', { label: t(label) })} onClick={event => {
           if (performance.now() < suppressClick.current || settling.current) { event.preventDefault(); return; }
           onSort(column.key);
         }} onKeyDown={event => {
@@ -126,8 +128,8 @@ export function FileTableHeader({ columns, layout, sort, trash, busy, selection,
           dropRef.current = next; setDrop(next);
           const moved = active.geometry.find(column => column.key === active.key)!;
           setGhost({ label, left: event.clientX - active.offset, top: bounds.top - 3, width: moved.width, height: bounds.height, settling: false });
-        }} onPointerUp={event => { void finish(event, false); }} onPointerCancel={event => { void finish(event, true); }} onLostPointerCapture={event => { void finish(event, true); }}>{label}<span className={sort.key === column.key ? 'sort-active' : 'sort-idle'}>{sort.key === column.key && !sort.ascending ? '↓' : '↑'}</span></button>
+        }} onPointerUp={event => { void finish(event, false); }} onPointerCancel={event => { void finish(event, true); }} onLostPointerCapture={event => { void finish(event, true); }}>{t(label)}<span className={sort.key === column.key ? 'sort-active' : 'sort-idle'}>{sort.key === column.key && !sort.ascending ? '↓' : '↑'}</span></button>
       </div>;
     })}
-  </div>{ghost && createPortal(<div className={`column-drag-ghost ${ghost.settling ? 'column-ghost-landing' : ''}`} aria-hidden="true" style={{ left: ghost.left, top: ghost.top, width: ghost.width, height: ghost.height }}>{ghost.label}<span>↔</span></div>, document.body)}</>;
+  </div>{ghost && createPortal(<div className={`column-drag-ghost ${ghost.settling ? 'column-ghost-landing' : ''}`} aria-hidden="true" style={{ left: ghost.left, top: ghost.top, width: ghost.width, height: ghost.height }}>{t(ghost.label)}<span>↔</span></div>, document.body)}</>;
 }

@@ -5,8 +5,10 @@ import type { CustomHTMLRenderer } from '@toast-ui/editor';
 import '@toast-ui/editor/dist/i18n/zh-cn';
 import '@toast-ui/editor/dist/toastui-editor.css';
 import { markdownImageURL } from './Markdown';
+import { useI18n } from './i18n';
 
 export function MarkdownVisualEditor({ value, share, path, disabled, onChange }: { value: string; share: string; path: string; disabled: boolean; onChange: (value: string) => void }) {
+  const { locale, t } = useI18n();
   const host = useRef<HTMLDivElement>(null);
   const initial = useRef(value);
   const changed = useRef(onChange);
@@ -33,7 +35,7 @@ export function MarkdownVisualEditor({ value, share, path, disabled, onChange }:
       const token = context.origin?.();
       if (token && !Array.isArray(token) && token.type === 'openTag' && token.attributes) {
         token.attributes.src = safeImage(String(token.attributes.src ?? ''));
-        token.attributes.alt = String(token.attributes.alt ?? '图片');
+        token.attributes.alt = String(token.attributes.alt ?? t('图片'));
       }
       return token ?? null;
     },
@@ -46,7 +48,7 @@ export function MarkdownVisualEditor({ value, share, path, disabled, onChange }:
         el: host.current,
         height: '100%', minHeight: '240px', initialValue: initial.current,
         initialEditType: 'wysiwyg', hideModeSwitch: true, autofocus: false,
-        language: 'zh-CN', usageStatistics: false,
+        language: locale, usageStatistics: false,
         toolbarItems: [['heading', 'bold', 'italic', 'strike'], ['hr', 'quote'], ['ul', 'ol', 'task'], ['table', 'link'], ['code', 'codeblock']],
         linkAttributes: { target: '_blank', rel: 'noopener noreferrer' },
         customHTMLRenderer: renderers,
@@ -72,8 +74,8 @@ export function MarkdownVisualEditor({ value, share, path, disabled, onChange }:
     return () => { destroy?.(); };
   }, []);
   return <div className="markdown-visual" inert={disabled}>
-    {loading && <div className="markdown-visual-loading" role="status">正在加载预览编辑器…</div>}
-    {error && <p className="form-error" role="alert">{error}；可切换到源代码继续编辑。</p>}
+    {loading && <div className="markdown-visual-loading" role="status">{t('正在加载预览编辑器…')}</div>}
+    {error && <p className="form-error" role="alert">{t('{detail}；可切换到源代码继续编辑。', { detail: t(error) })}</p>}
     <div ref={host} className="markdown-visual-host" />
   </div>;
 }
