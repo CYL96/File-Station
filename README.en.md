@@ -69,15 +69,42 @@ chmod 600 "$HOME/.config/file-station/config.json" "$HOME/.config/file-station/p
 
 Open <http://127.0.0.1:8080> and add existing directories in **Settings → Share settings**. Alternatively, set `password` directly in JSON and remove `passwordFile`; exactly one of the two sources must be nonempty.
 
-### Updating an existing user service
+### Testing in the current terminal
 
-If you have configured a `file-station.service` user service whose executable is `$HOME/.local/state/file-station/current/bin/file-station`, run:
+`test/update-service.sh` keeps its original path, but now only builds and runs in the current terminal; it no longer updates a service. From the repository root, run:
 
 ```sh
-./test/update-service.sh
+./test/update-service.sh -config /absolute/path/to/test-config.json
 ```
 
-The script can be called from any working directory. It builds the Nix package containing both frontend and backend, updates the `current` link, then restarts the user service and displays its status. It does not restart the service if the build fails. It does not install a service, change configuration, passwords, or persistent state, or update a NixOS system service. If it cannot read the `file-station.service` user unit, it reports the problem and exits before building or restarting. If only the old `nixos-file-station.service` exists, first complete the manual migration under [Migrating from the old name](#migrating-from-the-old-name-breaking-changes); the script neither accepts nor restarts the old service.
+The script builds the repository's Nix package with `nix build "path:$repo_root#default" --no-link --print-out-paths`, then uses `exec` to run `bin/file-station` from the build output, forwarding all arguments unchanged. The wrapper already supplies the static asset path, so `-static` is unnecessary. Logs appear directly in the current terminal; press Ctrl+C to exit. The script does not query, start, stop, or restart any system or user service, change the `$HOME/.local/state/file-station/current` link, or automatically select or create configuration.
+
+**To run alongside an existing service, prepare a separate test JSON file yourself, using a different port and an independent absolute `stateDir`. Never reuse the service's state directory.** For example, replace `/absolute/home` with the actual absolute path and save the following as `/absolute/path/to/test-config.json` (JSON does not expand environment variables):
+
+```json
+{
+  "ip": "127.0.0.1",
+  "port": 8081,
+  "stateDir": "/absolute/home/.local/state/file-station-test",
+  "passwordFile": "/absolute/home/.config/file-station-test/password",
+  "umask": "0022",
+  "secureCookies": false,
+  "shares": []
+}
+```
+
+Prepare the test password file and directories using the safe procedure under **Local build and run**: read the password interactively, write it with `umask 077`, set private directories to `0700` and the JSON and password files to `0600`, and keep them outside all shares. Check that port `8081` is available yourself, then open <http://127.0.0.1:8081> after starting. The script does not automatically isolate configuration or state; the application accesses data and writes test state according to the supplied configuration. Use dedicated test shares for file operations.
+
+### Updating an existing user service
+
+If `file-station.service` has an `ExecStart` pointing to `$HOME/.local/state/file-station/current/bin/file-station`, manually build and update that link from the repository root, restarting the corresponding user service only if the build succeeds:
+
+```sh
+nix build path:.#default --out-link "$HOME/.local/state/file-station/current" &&
+  systemctl --user restart file-station.service
+```
+
+These commands deliberately update and restart the existing service; the foreground test script does neither. Migrate old-name services first as described below. NixOS system services are still updated through `nixos-rebuild`.
 
 
 ## Configuration files and environment variables: two independent sources
@@ -431,7 +458,7 @@ The following applies only to the old `nixos-file-station.service` managed by `s
    systemctl --user status file-station.service --no-pager
    ```
 
-   Sign in and confirm the original shares and settings remain. For troubleshooting, use `journalctl --user -u file-station.service`; do not reinitialize by deleting state. After migration, continue using `./test/update-service.sh` for subsequent updates.
+   Sign in and confirm the original shares and settings remain. For troubleshooting, use `journalctl --user -u file-station.service`; do not reinitialize by deleting state. For subsequent updates, follow [Updating an existing user service](#updating-an-existing-user-service): manually build to the existing `current` link and restart the corresponding user service. `test/update-service.sh` is only for foreground testing.
 
 ## HTTPS, reverse proxies, and firewalls
 

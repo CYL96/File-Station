@@ -180,7 +180,42 @@ systemctl status file-station
 journalctl -u file-station
 ```
 
-若使用的是用户服务，且 `ExecStart` 指向 `$HOME/.local/state/file-station/current/bin/file-station`，可用 `./test/update-service.sh` 构建 Nix 包、更新链接并重启 `file-station.service`。脚本不安装服务、不修改配置或状态，也不更新 NixOS 系统服务；构建失败或找不到该用户 unit 时不会重启。
+### 在当前终端测试
+
+`test/update-service.sh` 保留原路径，但现在只构建并在当前终端运行，不再更新服务。从仓库根目录运行：
+
+```sh
+./test/update-service.sh -config /absolute/path/to/test-config.json
+```
+
+脚本用 `nix build "path:$repo_root#default" --no-link --print-out-paths` 构建仓库的 Nix 包，再用 `exec` 运行构建结果中的 `bin/file-station`，原样透传全部参数。包装器已包含静态资源路径，无需 `-static`；日志直接显示在当前终端，按 Ctrl+C 退出。脚本不查询、启动、停止或重启任何系统或用户服务，也不更改 `$HOME/.local/state/file-station/current` 链接，不自动选择或创建配置。
+
+**与已有服务并行运行时，必须自行准备独立测试 JSON，使用不同端口和独立的绝对 `stateDir`，不能复用服务的状态目录。** 例如，将 `/absolute/home` 替换为实际绝对路径后，把以下内容保存为 `/absolute/path/to/test-config.json`（JSON 不展开环境变量）：
+
+```json
+{
+  "ip": "127.0.0.1",
+  "port": 8081,
+  "stateDir": "/absolute/home/.local/state/file-station-test",
+  "passwordFile": "/absolute/home/.config/file-station-test/password",
+  "umask": "0022",
+  "secureCookies": false,
+  "shares": []
+}
+```
+
+按前文「本地运行」的安全方式准备测试密码文件和目录：交互读取密码，以 `umask 077` 写入密码文件，将私有目录设为 `0700`，JSON 与密码文件设为 `0600`，并放在所有共享之外。自行确认 `8081` 未被占用，启动后打开 <http://127.0.0.1:8081>。脚本不会自动隔离配置或状态；应用会按传入配置访问数据并写入测试状态，测试文件操作应使用专用测试共享。
+
+### 更新已有用户服务
+
+若 `file-station.service` 的 `ExecStart` 指向 `$HOME/.local/state/file-station/current/bin/file-station`，从仓库根目录手动构建并更新该链接，只有构建成功后才重启对应用户服务：
+
+```sh
+nix build path:.#default --out-link "$HOME/.local/state/file-station/current" &&
+  systemctl --user restart file-station.service
+```
+
+这会主动更新并重启已有服务，不属于前台测试脚本的行为。旧名称服务须先按下文迁移；NixOS 系统服务仍通过 `nixos-rebuild` 更新。
 
 ### Cachix 二进制缓存
 
@@ -269,4 +304,4 @@ journalctl -u file-station
 2. 显式保留原状态路径（旧默认 `/var/lib/nixos-file-station`，新默认 `/var/lib/file-station`）：JSON 用 `stateDir`，Docker 环境变量模式用 `ConfigPath`，容器 JSON 模式同时匹配配置与挂载。也可停机完整迁移，正确调整属主，绝不能删库重建。
 3. 保留原密码与必要启动设置。旧环境密码须迁入 JSON `password` 或 `passwordFile`；systemd 凭据和 `passwordSourceFile` 保护按需保留。新默认 `0022` 比旧权限宽；需旧 `0640/0750` 时设置 `0027`，NixOS 仍为 `0077`。
 4. NixOS 更新模块名后 rebuild。旧用户服务则用 `systemctl --user cat nixos-file-station.service` 检查原配置，创建 `file-station.service`（保留凭据、挂载依赖和自定义项），将 `ExecStart` 改为新包路径并显式传入原 `-config`；禁用旧 unit，再 `daemon-reload` 和 `enable --now file-station.service`。
-5. 重新登录，确认原共享、设置和文件仍在；迁移监控、日志命令及 unit 覆盖。仓库现名为 `CYL96/File-Station`。后续用户服务更新可使用上文脚本，脚本不会迁移或重启旧名称服务。
+5. 重新登录，确认原共享、设置和文件仍在；迁移监控、日志命令及 unit 覆盖。仓库现名为 `CYL96/File-Station`。后续用户服务更新按上文「更新已有用户服务」手动构建到原 `current` 链接并重启对应用户服务；`test/update-service.sh` 仅用于前台测试。
