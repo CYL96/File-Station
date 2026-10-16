@@ -8,7 +8,7 @@ import { VideoPreview } from './VideoPreview';
 import { useFileDialogWidth } from './useFileDialogWidth';
 import type { FileDialogKind } from './useFileDialogWidth';
 
-export type IconName = 'folder' | 'file' | 'image' | 'video' | 'trash' | 'upload' | 'download' | 'plus' | 'search' | 'chevron' | 'refresh' | 'copy' | 'move' | 'edit' | 'close' | 'tasks' | 'check' | 'logout' | 'menu' | 'grid' | 'list' | 'restore' | 'eye' | 'lock' | 'help' | 'server' | 'arrow' | 'warning';
+export type IconName = 'folder' | 'file' | 'image' | 'video' | 'trash' | 'upload' | 'download' | 'plus' | 'search' | 'chevron' | 'refresh' | 'copy' | 'move' | 'edit' | 'close' | 'tasks' | 'check' | 'logout' | 'menu' | 'grid' | 'list' | 'restore' | 'eye' | 'lock' | 'help' | 'server' | 'arrow' | 'warning' | 'settings';
 const shapes: Record<IconName, ReactNode> = {
   folder: <path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />,
   file: <><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6M8 13h8M8 17h5" /></>,
@@ -38,6 +38,7 @@ const shapes: Record<IconName, ReactNode> = {
   server: <><rect x="3" y="3" width="18" height="7" rx="2" /><rect x="3" y="14" width="18" height="7" rx="2" /><path d="M7 6.5h.01M7 17.5h.01M12 6.5h5M12 17.5h5" /></>,
   arrow: <path d="M20 12H4m6-6-6 6 6 6" />,
   warning: <><path d="m12 3 10 18H2zM12 9v5M12 17h.01" /></>,
+  settings: <><path d="m9.5 3-.6 2.3-1.3.8-2.3-.6-2.5 4.3 1.7 1.7v1.5l-1.7 1.7 2.5 4.3 2.3-.6 1.3.8.6 2.3h5l.6-2.3 1.3-.8 2.3.6 2.5-4.3-1.7-1.7v-1.5l1.7-1.7-2.5-4.3-2.3.6-1.3-.8-.6-2.3z" /><circle cx="12" cy="12" r="3" /></>,
 };
 export function Icon({ name, size = 20, className = '' }: { name: IconName; size?: number; className?: string }) {
   return <svg aria-hidden="true" width={size} height={size} className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">{shapes[name]}</svg>;

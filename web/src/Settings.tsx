@@ -10,10 +10,10 @@ function errorMessage(cause: unknown, fallback: string) {
   return cause instanceof ApiError && cause.status === 409 ? `${message} 请等待相关任务结束；如回收站仍有项目，请先恢复或清空后重试。` : message;
 }
 
-export function ShareSettings({ onClose, onChanged }: { onClose: () => void; onChanged: (change: ShareSettingsChange) => Promise<void> }) {
+export function Settings({ onClose, onChanged }: { onClose: () => void; onChanged: (change: ShareSettingsChange) => Promise<void> }) {
+  const [category, setCategory] = useState<'shares' | null>(null);
   const [data, setData] = useState<ShareSettingsData | null>(null);
   const [loading, setLoading] = useState(true);
-  const [reload, setReload] = useState(0);
   const [draft, setDraft] = useState<ShareDraft | null>(null);
   const [removing, setRemoving] = useState<ManagedShare | null>(null);
   const [busy, setBusy] = useState(false);
@@ -29,7 +29,7 @@ export function ShareSettings({ onClose, onChanged }: { onClose: () => void; onC
       .catch(cause => { if (!controller.signal.aborted) setError(errorMessage(cause, '读取共享设置失败')); })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
-  }, [reload]);
+  }, []);
 
   function edit(share?: ManagedShare) {
     setDraft(share ? { id: share.id, name: share.name, path: share.path, readOnly: share.readOnly, originalPath: share.path } : { name: '', path: '', readOnly: false });
@@ -53,13 +53,34 @@ export function ShareSettings({ onClose, onChanged }: { onClose: () => void; onC
   }
   const path = draft ? draft.path.replace(/\/+$/, '') || '/' : '';
   const invalid = !draft?.name.trim() || !draft.path.startsWith('/');
-  return <><Modal title="共享设置" wide onClose={() => { if (!writing.current) onClose(); }}>
-    <div className="modal-body share-settings-body" aria-busy={busy || loading}>
+  return <><Modal title="设置" wide onClose={() => { if (!writing.current) onClose(); }}>
+    <div className="modal-body settings-body">
+      {category === null ? <div className="settings-home">
+        <p className="settings-home-description">选择设置分类，管理文件工作空间。</p>
+        <div className="settings-categories">
+          <button type="button" className="settings-category-card" onClick={() => setCategory('shares')} autoFocus>
+            <span className="settings-category-icon"><Icon name="folder" size={24} /></span>
+            <span className="settings-category-copy"><strong>共享设置</strong><span>管理共享目录、访问权限</span></span>
+            <Icon name="chevron" size={17} />
+          </button>
+        </div>
+      </div> : <>
+        <div className="settings-category-heading">
+          <button type="button" className="button settings-back" disabled={busy} onClick={() => { if (!writing.current) { setPickerOpen(false); setCategory(null); } }} autoFocus><Icon name="arrow" size={16} />返回设置</button>
+          <h3>共享设置</h3>
+        </div>
+        <div className="share-settings-body" aria-busy={busy || loading}>
       {error && <div className="share-settings-feedback"><p className="form-error" role="alert">{error}</p>{!busy && <button className="button" onClick={async () => {
+        if (writing.current) return;
         writing.current = true; setBusy(true);
-        try { await onChanged({}); setReload(value => value + 1); }
-        catch (cause) { setError(errorMessage(cause, '刷新共享目录失败')); }
-        finally { writing.current = false; setBusy(false); }
+        try {
+          const results = await Promise.allSettled([
+            request<ShareSettingsData>('settings/shares').then(setData),
+            onChanged({}),
+          ]);
+          const failures = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected');
+          setError(failures.map(result => errorMessage(result.reason, '刷新共享目录失败')).join('；'));
+        } finally { writing.current = false; setBusy(false); }
       }}><Icon name="refresh" size={16} />重新加载设置</button>}</div>}
       {success && <p className="share-settings-success" role="status"><Icon name="check" size={17} />{success}</p>}
       {loading ? <div className="loading-state" role="status"><span className="spinner" />正在读取共享设置…</div> : data && <>
@@ -77,9 +98,11 @@ export function ShareSettings({ onClose, onChanged }: { onClose: () => void; onC
           </section>
         </div>
       </>}
+        </div>
+      </>}
     </div>
   </Modal>
-    {pickerOpen && draft && <SettingsDirectoryPicker initialPath={path} onClose={() => setPickerOpen(false)} onChoose={value => { setDraft({ ...draft, path: value }); setPickerOpen(false); }} />}
+    {category === 'shares' && pickerOpen && draft && <SettingsDirectoryPicker initialPath={path} onClose={() => setPickerOpen(false)} onChoose={value => { setDraft({ ...draft, path: value }); setPickerOpen(false); }} />}
   </>;
 }
 
