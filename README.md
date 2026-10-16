@@ -1,8 +1,16 @@
 # File Station
 
+**简体中文** | [English](README.en.md)
+
 单管理员 Web 文件管理器，支持普通 Linux 用户、Docker 和 NixOS 部署。React + TypeScript 前端、Go HTTP 服务和 SQLite 持久状态；文件内容直接留在共享目录，宿主机或 Samba 修改文件后刷新即可查看。
 
 应用必须以非 root 用户运行，不提供多用户 Linux 身份映射、提权或系统管理能力。**首次启动默认零共享，不自动共享 home、挂载目录或任何其他路径。** 登录后在「共享设置」手动添加目录；容器中需先挂载，再添加容器内路径。
+
+## 界面预览
+
+![File Station 中文文件管理界面，展示共享目录导航、文件列表和文件操作工具栏](docs/screenshots/files-list-zh.png)
+
+截图使用演示数据；首次启动仍为空共享，需自行添加目录。
 
 ## 主要功能
 
