@@ -20,6 +20,14 @@
 
 ## Docker / Compose
 
+仓库 `compose.yaml` 默认仍从本地源码构建。使用 GHCR 发布镜像部署时，删除现有服务的 `build: .`，将 `image` 替换为固定版本，保留其余环境变量、端口、挂载及安全配置：
+
+```yaml
+    image: ghcr.io/cyl96/file-station:1.0.0
+```
+
+`1.0.0` 仅为示例，不表示该版本已发布；请选用已成功发布的版本。镜像支持 `linux/amd64` 和 `linux/arm64`，Docker 会自动选择架构，也可直接执行 `docker pull ghcr.io/cyl96/file-station:1.0.0`。首次公开拉取前需完成下文的 GHCR package 权限设置。
+
 在仓库根目录创建私有 `.env`（权限 `0600`，勿提交版本库）：
 
 ```dotenv
@@ -34,8 +42,10 @@ ConfigPath='/var/lib/file-station'
 
 ```sh
 mkdir -p state
-docker compose up -d --build
+docker compose pull && docker compose up -d
 ```
+
+上述命令用于已切换为 GHCR 镜像的 Compose；若保留仓库默认本地构建配置，则使用 `docker compose up -d --build`。更新或重建容器时保留 `./state`，不要删除状态目录或数据库。
 
 打开 <http://127.0.0.1:8080>。默认只发布到宿主回环地址，`./state` 持久挂载到 `ConfigPath`；例如设为 `/config` 时，挂载自动变为 `./state:/config`。**`ConfigPath` 是状态目录，不是 config.json 路径。**
 
@@ -121,7 +131,11 @@ git push origin v1.0.0
 
 构建全部成功后，自动生成更新说明并发布正式 GitHub Release，附件为 `file-station-v1.0.0-linux-amd64.tar.gz`、`file-station-v1.0.0-linux-arm64.tar.gz` 和 `SHA256SUMS`。每个压缩包包含同名顶级目录，内有静态 Go 二进制、`web/dist`、许可证及中英文说明，不依赖 Nix。Release 发布成功后才调用 Cachix 工作流，构建并上传同一标签提交的 Nix 包；普通 `main` 推送不再自动构建缓存。
 
-工作流使用自动提供的 `GITHUB_TOKEN` 发布 Release，无需新增个人访问令牌；Cachix 仍需下文的变量和密钥。发布前构建失败不会创建 Release；上传或发布失败时检查是否留有草稿，确认后处理再重跑。已正式发布的 Release 不会被工作流覆盖，标签不得移动；需要修复时发布新版本。若仅后续 Cachix 失败，在 Actions 中选择 **Re-run failed jobs**，无需重新发布 Release。
+正式标签还会自动发布多架构镜像 `ghcr.io/cyl96/file-station:<version>`（去掉标签开头的 `v`）和 `ghcr.io/cyl96/file-station:latest`，支持 `linux/amd64`、`linux/arm64`。只有版本校验、全部构建与测试、两个架构原生非 root 容器的 HTTP smoke 和 GitHub Release 均成功后，才发布这两个最终镜像标签；配置工作流不等于镜像已经发布。
+
+`latest` 发布在跨版本互斥区内比较镜像版本，只允许相同或更高版本更新；旧版本延迟完成或重跑不会把 `latest` 回退。旧版本的固定版本标签仍会发布。
+
+工作流使用自动提供的 `GITHUB_TOKEN` 发布 Release 和镜像，镜像任务授予 `packages: write`，无需额外 PAT。首次创建 GHCR package 后，维护者须在 package 设置中将可见性设为 **Public**，才允许匿名拉取；已有 package 须在 **Manage Actions access** 中允许本仓库 **Write**。Cachix 仍需下文的变量和密钥。发布前构建失败不会创建 Release；上传或发布失败时检查是否留有草稿，确认后处理再重跑。已正式发布的 Release 不会被工作流覆盖，标签不得移动；需要修复时发布新版本。若仅后续镜像或 Cachix 失败，在 Actions 中选择 **Re-run failed jobs**，无需重新发布 Release。
 
 用户从 [Releases](https://github.com/CYL96/File-Station/releases) 下载匹配架构的压缩包和 `SHA256SUMS`，在下载目录校验并解压（以下以 amd64 的 `v1.0.0` 为例；校验文件包含两个架构，`--ignore-missing` 允许只下载其中一个）：
 
