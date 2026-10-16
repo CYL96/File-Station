@@ -1,17 +1,19 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { apiURL, preview } from './api';
+import { ApiError, apiURL, preview } from './api';
 import type { Entry } from './api';
 import { Markdown, isMarkdown } from './Markdown';
 import { ImagePreview } from './ImagePreview';
+import { VideoPreview } from './VideoPreview';
 import { useFileDialogWidth } from './useFileDialogWidth';
 import type { FileDialogKind } from './useFileDialogWidth';
 
-export type IconName = 'folder' | 'file' | 'image' | 'trash' | 'upload' | 'download' | 'plus' | 'search' | 'chevron' | 'refresh' | 'copy' | 'move' | 'edit' | 'close' | 'tasks' | 'check' | 'logout' | 'menu' | 'grid' | 'list' | 'restore' | 'eye' | 'lock' | 'help' | 'server' | 'arrow' | 'warning';
+export type IconName = 'folder' | 'file' | 'image' | 'video' | 'trash' | 'upload' | 'download' | 'plus' | 'search' | 'chevron' | 'refresh' | 'copy' | 'move' | 'edit' | 'close' | 'tasks' | 'check' | 'logout' | 'menu' | 'grid' | 'list' | 'restore' | 'eye' | 'lock' | 'help' | 'server' | 'arrow' | 'warning';
 const shapes: Record<IconName, ReactNode> = {
   folder: <path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />,
   file: <><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6M8 13h8M8 17h5" /></>,
   image: <><rect x="3" y="3" width="18" height="18" rx="2" /><circle cx="8" cy="8" r="1.5" /><path d="m21 15-5-5L5 21" /></>,
+  video: <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="m10 8 6 4-6 4z" /></>,
   trash: <><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7" /></>,
   upload: <><path d="M12 16V3m-5 5 5-5 5 5M4 16v5h16v-5" /></>,
   download: <><path d="M12 3v13m-5-5 5 5 5-5M4 16v5h16v-5" /></>,
@@ -68,25 +70,37 @@ export function Modal({ title, children, onClose, wide = false, headerContent, f
   </dialog>;
 }
 export function Preview({ share, entry, onClose, onEdit }: { share: string; entry: Entry; onClose: () => void; onEdit?: () => void }) {
-  const [content, setContent] = useState<{ url?: string; text?: string; error?: string }>({});
+  const [content, setContent] = useState<{ url?: string; videoURL?: string; text?: string; error?: string }>({});
   useEffect(() => {
     setContent({});
     const controller = new AbortController();
     let url: string | undefined;
-    preview(share, entry.path, controller.signal).then(async ({ type, blob }) => {
+    preview(share, entry.path, controller.signal).then(async response => {
       if (controller.signal.aborted) return;
-      if (type.startsWith('image/')) {
+      const type = (response.headers.get('Content-Type') ?? '').split(';', 1)[0].trim().toLowerCase();
+      if (type === 'video/mp4' || type === 'video/webm') {
+        await response.body?.cancel();
+        if (!controller.signal.aborted) setContent({ videoURL: apiURL('preview', { share, path: entry.path }) });
+      } else if (type.startsWith('image/')) {
+        const blob = await response.blob();
+        if (controller.signal.aborted) return;
         url = URL.createObjectURL(blob);
         setContent({ url });
       } else {
-        const text = await blob.text();
+        const text = await response.text();
         if (!controller.signal.aborted) setContent({ text });
       }
-    }).catch(error => { if (!controller.signal.aborted) setContent({ error: error instanceof Error ? error.message : '预览失败' }); });
+    }).catch(error => { if (!controller.signal.aborted) setContent({ error: error instanceof ApiError ? error.message : '预览加载失败，请检查网络连接，或下载文件查看。' }); });
     return () => { controller.abort(); if (url) URL.revokeObjectURL(url); };
   }, [share, entry.path]);
   return <Modal title={entry.name} wide fileDialog={{ kind: 'preview', content }} onClose={onClose} headerContent={<div className="preview-actions">{content.text !== undefined && onEdit && <button className="button" onClick={onEdit}><Icon name="edit" size={17} />编辑文件</button>}<a className="button primary" href={apiURL('download', { share, path: entry.path })} download={entry.name}><Icon name="download" size={17} />下载文件</a></div>}>
-    <div className={`preview-body${content.url ? ' preview-body-image' : ''}`}>{content.error ? <div className="empty-state"><Icon name="file" size={48} /><h3>无法预览此文件</h3><p>{content.error}</p><p>支持常见图片以及不超过 1 MiB 的 UTF-8 文本；其他文件请下载查看。</p></div> : content.url ? <ImagePreview key={content.url} url={content.url} name={entry.name} onError={() => setContent({ error: '图片无法解码，文件可能已损坏或不是受支持的图片。' })} /> : content.text !== undefined ? isMarkdown(entry.name) ? <Markdown text={content.text} share={share} path={entry.path} /> : <pre className="preview-text">{content.text}</pre> : <div className="loading-state" role="status"><span className="spinner" />正在加载预览…</div>}</div>
+    <div className={`preview-body${content.url ? ' preview-body-image' : content.videoURL ? ' preview-body-video' : ''}`}>
+      {content.error ? <div className="empty-state"><Icon name="file" size={48} /><h3>无法预览此文件</h3><p>{content.error}</p><p>支持常见图片、MP4 / WebM 视频以及不超过 1 MiB 的 UTF-8 文本；视频能否播放取决于浏览器支持的编码，其他文件请下载查看。</p></div>
+        : content.videoURL ? <VideoPreview key={content.videoURL} share={share} path={entry.path} url={content.videoURL} name={entry.name} />
+        : content.url ? <ImagePreview key={content.url} url={content.url} name={entry.name} onError={() => setContent({ error: '图片无法解码，文件可能已损坏或不是受支持的图片。' })} />
+        : content.text !== undefined ? isMarkdown(entry.name) ? <Markdown text={content.text} share={share} path={entry.path} /> : <pre className="preview-text">{content.text}</pre>
+        : <div className="loading-state" role="status"><span className="spinner" />正在加载预览…</div>}
+    </div>
     <footer className="modal-actions preview-footer"><span>{formatBytes(entry.size)} · {formatDate(entry.modified)}</span><span className="preview-resize-help">拖动右下角可调整宽度</span></footer>
   </Modal>;
 }
@@ -102,5 +116,7 @@ export function formatDate(value: string) {
 }
 export function fileIcon(entry: { name?: string; path?: string; isDir: boolean }): IconName {
   if (entry.isDir) return 'folder';
-  return /\.(png|jpe?g|gif|webp)$/i.test(entry.name ?? entry.path ?? '') ? 'image' : 'file';
+  const name = entry.name ?? entry.path ?? '';
+  if (/\.(mp4|webm)$/i.test(name)) return 'video';
+  return /\.(png|jpe?g|gif|webp)$/i.test(name) ? 'image' : 'file';
 }

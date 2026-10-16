@@ -319,7 +319,7 @@ func (s *Server) preview(w http.ResponseWriter, r *http.Request) error {
 	kind := http.DetectContentType(head[:n])
 	w.Header().Set("Content-Security-Policy", "default-src 'none'; sandbox")
 	switch kind {
-	case "image/png", "image/jpeg", "image/gif", "image/webp":
+	case "image/png", "image/jpeg", "image/gif", "image/webp", "video/mp4", "video/webm":
 		w.Header().Set("Content-Type", kind)
 		if _, err = f.Seek(0, 0); err != nil {
 			return err

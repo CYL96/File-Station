@@ -45,10 +45,10 @@ export async function request<T>(endpoint: string, body?: unknown, params?: Reco
   if (!response.ok) return failure(response);
   return response.json() as Promise<T>;
 }
-export async function preview(share: string, path: string, signal: AbortSignal): Promise<{ type: string; blob: Blob }> {
-  const response = await fetch(apiURL('preview', { share, path }), { signal, credentials: 'same-origin' });
+export async function preview(share: string, path: string, signal: AbortSignal, method: 'GET' | 'HEAD' = 'GET'): Promise<Response> {
+  const response = await fetch(apiURL('preview', { share, path }), { method, signal, credentials: 'same-origin' });
   if (!response.ok) return failure(response);
-  return { type: response.headers.get('Content-Type') ?? '', blob: await response.blob() };
+  return response;
 }
 export function upload(file: File, share: string, path: string, conflict: Conflict, progress: (loaded: number) => void, signal: AbortSignal): Promise<{ skipped?: boolean }> {
   const { promise, resolve, reject } = Promise.withResolvers<{ skipped?: boolean }>();
