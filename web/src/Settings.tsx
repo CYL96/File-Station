@@ -108,13 +108,13 @@ export function Settings({ generalSettings, generalLoading, generalError, onSave
               <label className="field-label" htmlFor="general-date-format">{t('日期显示格式')}</label>
               <select id="general-date-format" className="text-input" value={dateFormat} onChange={event => { setGeneralDraft({ dateFormat: event.target.value as DateFormat }); setGeneralSaveError(''); setGeneralSuccess(''); }} aria-describedby="general-date-help general-date-preview">
                 <option value="locale">{t('默认格式（跟随界面语言）')}</option>
-                <option value="yyyy-MM-dd">{t('年-月-日（yyyy-MM-dd HH:mm）')}</option>
-                <option value="yyyy/MM/dd">{t('年/月/日（yyyy/MM/dd HH:mm）')}</option>
-                <option value="dd/MM/yyyy">{t('日/月/年（dd/MM/yyyy HH:mm）')}</option>
-                <option value="MM/dd/yyyy">{t('月/日/年（MM/dd/yyyy HH:mm）')}</option>
+                <option value="yyyy-MM-dd">{t('年-月-日（yyyy-MM-dd HH:mm:ss）')}</option>
+                <option value="yyyy/MM/dd">{t('年/月/日（yyyy/MM/dd HH:mm:ss）')}</option>
+                <option value="dd/MM/yyyy">{t('日/月/年（dd/MM/yyyy HH:mm:ss）')}</option>
+                <option value="MM/dd/yyyy">{t('月/日/年（MM/dd/yyyy HH:mm:ss）')}</option>
               </select>
-              <p id="general-date-help" className="field-help">{t('使用本地时区和 24 小时制，保留小时与分钟。保存后应用到文件修改、创建、回收站删除时间和预览中的日期。')}</p>
-              <p id="general-date-preview" className="general-date-preview" aria-live="polite">{t('显示示例：')}<time>{formatDate(new Date(2026, 10, 23, 14, 5).toISOString(), dateFormat)}</time></p>
+              <p id="general-date-help" className="field-help">{t('使用本地时区和 24 小时制，保留小时、分钟与秒。保存后应用到文件修改、创建、回收站删除时间和预览中的日期。')}</p>
+              <p id="general-date-preview" className="general-date-preview" aria-live="polite">{t('显示示例：')}<time>{formatDate(new Date(2026, 10, 23, 14, 5, 9).toISOString(), dateFormat)}</time></p>
             </fieldset>
             <div className="share-editor-actions"><span className="field-help">{t('选择后需保存才会生效。')}</span><button type="submit" className="button primary" disabled={busy}>{t(busy ? '正在保存…' : '保存通用设置')}</button></div>
           </>}
