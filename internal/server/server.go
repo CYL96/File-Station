@@ -266,7 +266,7 @@ func (s *Server) api(pattern string, handler func(http.ResponseWriter, *http.Req
 	s.mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		csrf, err := s.session(r)
-		if err == nil && r.Method != "GET" {
+		if err == nil && r.Method != "GET" && r.Method != "HEAD" {
 			if !s.originOK(r) || subtle.ConstantTimeCompare([]byte(csrf), []byte(r.Header.Get("X-CSRF-Token"))) != 1 {
 				err = fail(403, "请求校验失败")
 			}
