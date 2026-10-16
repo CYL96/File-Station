@@ -115,6 +115,77 @@ jobs:
           path: ${{ runner.temp }}/release/*.tar.gz
           if-no-files-found: error
 
+  images:
+    needs: [validate, build]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Check out source
+        # actions/checkout v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        # docker/setup-buildx-action v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+
+      - name: Log in to GHCR
+        # docker/login-action v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build, smoke test, and push image by digest
+        shell: bash
+        env:
+          TAG: ${{ needs.validate.outputs.tag }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          version="${TAG#v}"
+          build_args=(
+            --platform "linux/$ARCH"
+            --provenance=false
+            --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY"
+            --label "org.opencontainers.image.version=$version"
+            --label "org.opencontainers.image.revision=$GITHUB_SHA"
+          )
+          docker buildx build "${build_args[@]}" --load --tag file-station:smoke .
+          bash scripts/smoke-image.sh file-station:smoke "$version"
+          docker buildx build "${build_args[@]}" \
+            --output "type=image,name=$image,push-by-digest=true,name-canonical=true,push=true" \
+            --metadata-file "$RUNNER_TEMP/image-metadata.json" .
+          digest=$(jq -er '."containerimage.digest"' "$RUNNER_TEMP/image-metadata.json")
+          if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo '::error::镜像构建未返回有效的 SHA-256 digest。' >&2
+            exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/image-digest"
+          touch "$RUNNER_TEMP/image-digest/${digest#sha256:}"
+
+      - name: Upload image digest
+        # actions/upload-artifact v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: image-digest-${{ matrix.arch }}
+          path: ${{ runner.temp }}/image-digest/*
+          if-no-files-found: error
+
   publish:
     needs: [validate, build]
     runs-on: ubuntu-24.04
@@ -155,6 +226,80 @@ jobs:
           sha256sum "$amd64" "$arm64" > SHA256SUMS
           gh release create "$TAG" "$amd64" "$arm64" SHA256SUMS \
             --verify-tag --title "File Station $TAG" --generate-notes
+
+  publish-image:
+    needs: [validate, images, publish]
+    runs-on: ubuntu-24.04
+    concurrency:
+      group: ghcr-image-publication
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Set up Docker Buildx
+        # docker/setup-buildx-action v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+
+      - name: Log in to GHCR
+        # docker/login-action v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download image digests
+        # actions/download-artifact v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: image-digest-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/image-digests
+
+      - name: Publish and verify multi-platform image
+        shell: bash
+        env:
+          TAG: ${{ needs.validate.outputs.tag }}
+        run: |
+          set -euo pipefail
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          version="${TAG#v}"
+          shopt -s nullglob dotglob
+          digest_files=("$RUNNER_TEMP/image-digests/"*)
+          if [[ ${#digest_files[@]} -ne 2 ]]; then
+            echo '::error::发布镜像需要恰好两个平台的 digest。' >&2
+            exit 1
+          fi
+          sources=()
+          for file in "${digest_files[@]}"; do
+            digest="${file##*/}"
+            if [[ ! -f "$file" || -L "$file" || ! "$digest" =~ ^[0-9a-f]{64}$ ]]; then
+              echo '::error::镜像 digest 文件无效。' >&2
+              exit 1
+            fi
+            sources+=("$image@sha256:$digest")
+          done
+          docker buildx imagetools create --tag "$image:$version" "${sources[@]}"
+          docker buildx imagetools inspect "$image:$version" --raw | \
+            jq -e '[.manifests[] | "\(.platform.os)/\(.platform.architecture)"] | sort == ["linux/amd64", "linux/arm64"]'
+          if docker buildx imagetools inspect "$image:latest" --format '{{json .Image}}' \
+            > "$RUNNER_TEMP/latest-image.json" 2> "$RUNNER_TEMP/latest-image-error"; then
+            current=$(jq -er '[.[].config.Labels["org.opencontainers.image.version"]] | unique | if length == 1 then .[0] else error("平台版本不一致") end' "$RUNNER_TEMP/latest-image.json")
+            [[ $current =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || {
+              echo '::error::latest 镜像缺少有效版本，拒绝覆盖。' >&2
+              exit 1
+            }
+            mapfile -t versions < <(printf '%s\n' "$current" "$version" | sort -V)
+            if [[ ${versions[-1]} != "$version" ]]; then
+              printf '保留较新的 latest %s；本次仅发布 %s。\n' "$current" "$version"
+              exit 0
+            fi
+          elif ! grep -Eq '(manifest unknown|: not found)' "$RUNNER_TEMP/latest-image-error"; then
+            cat "$RUNNER_TEMP/latest-image-error" >&2
+            exit 1
+          fi
+          docker buildx imagetools create --tag "$image:latest" "${sources[@]}"
 
   cache:
     needs: publish

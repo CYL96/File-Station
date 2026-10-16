@@ -139,6 +139,14 @@ After initialization, add, edit, and remove shares in **Settings → Share setti
 
 ## Docker / Compose
 
+The repository's `compose.yaml` still builds from local source by default. To deploy a published GHCR image, remove the service's `build: .` and replace its `image` with a pinned version, keeping all other environment variables, ports, mounts, and security settings:
+
+```yaml
+    image: ghcr.io/cyl96/file-station:1.0.0
+```
+
+`1.0.0` is only an example, not a claim that this version is published; choose a successfully published version. Images support `linux/amd64` and `linux/arm64`; Docker selects the architecture automatically. You can also run `docker pull ghcr.io/cyl96/file-station:1.0.0` directly. Anonymous pulls require the GHCR package permissions described in the release section below.
+
 The image uses a multi-stage Node.js 24 and Go 1.26 build. The final image contains Alpine, CA certificates, `su-exec`, a static Go binary, and the frontend; neither Node.js nor Go is needed at runtime. The entrypoint briefly runs as root to validate `PUID` / `PGID` (defaulting to `1000:1000` when unset), prepare the private state directory specified by `ConfigPath` (default `/var/lib/file-station`), and adjust ownership of that directory alone. It then drops privileges through `su-exec`. The Go service, now running as that non-root identity, sets its actual state directory's permissions to `0700`. **The application process always runs as non-root.** It does not recursively change existing state contents, let alone shared data. Choose an identity directly with `docker run -e PUID=… -e PGID=…`; Compose `user:` is unnecessary. The entrypoint requires a nonempty absolute `ConfigPath` whose directory itself is not a symlink, and also rejects paths resolving to the root directory `/`.
 
 The repository's `compose.yaml` publishes only to host `127.0.0.1:8080` by default and mounts `./state` at `${ConfigPath-/var/lib/file-station}` for persistence. The mount target stays in sync with the `ConfigPath` passed to the container. Compose secrets are no longer used. Its only environment variables are the following five. `PASSWORD` has no default password and may be empty in file mode; environment-variable mode checks for at least 6 bytes at startup:
@@ -152,7 +160,7 @@ environment:
   ConfigPath: '${ConfigPath-/var/lib/file-station}'
 ```
 
-For a **fresh deployment**, prepare the following in Bash at the repository root:
+For a **fresh deployment** using the GHCR image configured above, prepare the following in Bash at the repository root:
 
 ```sh
 # Use the current regular user, or specify another non-root UID/GID.
@@ -161,11 +169,11 @@ read -rs -p 'Administrator password (at least 6 bytes; 12+ recommended): ' PASSW
 printf '\n'
 export PASSWORD
 mkdir -p state
-docker compose up -d --build
+docker compose pull && docker compose up -d
 unset PASSWORD
 ```
 
-If you prefer to enter the password directly, create a private `.env` file (mode `0600`, never committed), then run `docker compose up -d --build`:
+If you prefer to enter the password directly, create a private `.env` file (mode `0600`, never committed), then run `docker compose pull && docker compose up -d`:
 
 ```dotenv
 PUID=1000
@@ -176,6 +184,8 @@ ConfigPath='/var/lib/file-station'
 ```
 
 `PASSWORD` has no default; you must replace the example value. **If a password entered directly in Compose YAML contains `$`, write it as `$$`. In `.env`, enclose the password in single quotes to avoid variable interpolation.** Do not rely on YAML single quotes alone to prevent Compose interpolation, and never use a documentation example password as your real password.
+
+If you retain the repository's default local-build configuration instead, use `docker compose up -d --build`. Preserve `./state` during updates and container recreation; do not delete the state directory or database.
 
 The recommended custom state path example is `ConfigPath=/config`: set `ConfigPath='/config'` in your private `.env`. Compose then mounts `./state` at `/config` (that is, `./state:/config`), and persistent state such as SQLite is stored directly in that directory. Do not enter `/config/config.json` or set `ConfigPath=''`.
 
@@ -194,7 +204,7 @@ volumes:
 
 After recreating the container, add **`/mnt/documents`** manually in the UI, not the host path `/srv/documents`. A mount does not automatically become a share, and the container cannot browse host paths that have not been mounted into it. Host directory UID/GID ownership, ACLs, and read-only mounts still apply. Switching identities with `su-exec` clears supplementary groups; do not rely on Docker `group_add` / `--group-add` to retain access. Set primary-group permissions or ACLs for the actual process identity. Do not switch to root for convenience or recursively change ownership of existing shared data.
 
-You can also run without Compose (prepare `state` first; these commands read the password from the terminal, not Compose's `.env`):
+You can also build locally and run without Compose (prepare `state` first; these commands read the password from the terminal, not Compose's `.env`):
 
 ```sh
 mkdir -p state
@@ -274,7 +284,11 @@ git push origin v1.0.0
 
 After both builds succeed, it generates release notes and publishes a GitHub Release containing `file-station-v1.0.0-linux-amd64.tar.gz`, `file-station-v1.0.0-linux-arm64.tar.gz`, and `SHA256SUMS`. Each archive has a matching top-level directory containing a static Go executable, `web/dist`, the license, and both READMEs; Nix is not required. Only after publication succeeds does it call the Cachix workflow to build and upload Nix packages from the same tagged commit. Ordinary pushes to `main` no longer automatically build the cache.
 
-Publication uses the automatic `GITHUB_TOKEN`; no personal access token is needed. Configure the repository variable `CACHIX_CACHE=cyl96-file-station` and secret `CACHIX_AUTH_TOKEN` with a per-cache write token. A build failure prevents release creation. An upload/publication failure may leave a draft; inspect and handle it before rerunning. Published releases are not overwritten and tags must not be moved; publish a new version for fixes. If only Cachix fails after publication, use **Re-run failed jobs** in Actions without publishing again. To build the default branch cache independently, manually run **Nix binary cache** on the default branch.
+Stable tags also automatically publish the multi-architecture images `ghcr.io/cyl96/file-station:<version>` (the tag without its leading `v`) and `ghcr.io/cyl96/file-station:latest`, supporting `linux/amd64` and `linux/arm64`. These final image tags are published only after version validation, all builds and tests, native non-root container HTTP smoke tests on both architectures, and GitHub Release publication succeed. Configuring the workflow does not mean an image has already been published.
+
+Updates to `latest` are serialized across releases and compare the embedded image version, allowing only equal or newer versions. A delayed or rerun older release still publishes its pinned version tag without rolling back `latest`.
+
+Release and image publication use the automatic `GITHUB_TOKEN`, with `packages: write` granted to image jobs; no additional PAT is needed. After the first GHCR package is created, a maintainer must set its visibility to **Public** in package settings to permit anonymous pulls. For an existing package, grant this repository **Write** under **Manage Actions access**. Cachix still requires the repository variable `CACHIX_CACHE=cyl96-file-station` and secret `CACHIX_AUTH_TOKEN` with a per-cache write token. A build failure prevents release creation. An upload/publication failure may leave a draft; inspect and handle it before rerunning. Published releases are not overwritten and tags must not be moved; publish a new version for fixes. If only subsequent image publication or Cachix fails, use **Re-run failed jobs** in Actions without publishing the Release again. To build the default branch cache independently, manually run **Nix binary cache** on the default branch.
 
 Download the archive matching your architecture and `SHA256SUMS` from [Releases](https://github.com/CYL96/File-Station/releases). Verify and extract them in the download directory (amd64 `v1.0.0` example; `--ignore-missing` permits downloading only one architecture):
 
