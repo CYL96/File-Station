@@ -78,10 +78,12 @@
 .settings-back{flex-shrink:0;white-space:nowrap}
 .general-settings{max-width:560px;min-width:0}
 .general-settings fieldset{border:0;margin:0;padding:0;min-width:0}
+.general-settings fieldset+fieldset{margin-top:24px}
 .general-settings .text-input{max-width:100%;min-width:0}
 .general-settings .field-help{font-size:12px;line-height:1.8;color:var(--muted);overflow-wrap:anywhere}
-.general-date-preview{margin:18px 0 0;padding:14px;border:1px solid var(--border);border-radius:7px;background:#f7fbff;font-size:12px;line-height:1.8;overflow-wrap:anywhere}
-.general-date-preview time{font-variant-numeric:tabular-nums}
+.general-format-preview{margin:18px 0 0;padding:14px;border:1px solid var(--border);border-radius:7px;background:#f7fbff;font-size:12px;line-height:1.8;overflow-wrap:anywhere}
+.general-format-preview time{font-variant-numeric:tabular-nums}
+.general-format-preview code{font-family:monospace}
 .general-settings .share-editor-actions{align-items:center;justify-content:space-between}
 .general-settings .share-editor-actions .field-help{margin:0}
 .share-settings-feedback{margin-bottom:16px;padding:12px 14px;border:1px solid #f0d8de;border-radius:7px;background:#fff8fa}

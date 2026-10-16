@@ -13,7 +13,9 @@ import { GridSortMenu } from './GridSortMenu';
 import { FileSizeDialog } from './FileSizeDialog';
 import type { SizeSelection } from './FileSizeDialog';
 import { TextEditor } from './TextEditor';
-import { defaultGeneralSettings, formatDate } from './dateFormat';
+import { formatDate } from './dateFormat';
+import { defaultGeneralSettings } from './generalSettings';
+import { formatPermissions } from './permissionFormat';
 import { LanguageSwitcher, useI18n } from './i18n';
 
 type Item = Entry & { trashId?: string; deletedAt?: string };
@@ -241,6 +243,7 @@ export default function App() {
       case 'size': return entry.isDir ? '—' : formatBytes(entry.size);
       case 'modified': return formatDate(entry.modified, generalSettings.dateFormat);
       case 'created': return entry.created ? formatDate(entry.created, generalSettings.dateFormat) : '—';
+      case 'permissions': return formatPermissions(entry.permissions, generalSettings.permissionFormat);
       case 'type': return typeLabel(entry);
       default: return entry[key] || '—';
     }

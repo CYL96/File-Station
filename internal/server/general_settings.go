@@ -10,25 +10,43 @@ import (
 )
 
 type generalSettings struct {
-	DateFormat string `json:"dateFormat"`
+	DateFormat       string `json:"dateFormat"`
+	PermissionFormat string `json:"permissionFormat"`
 }
 
 type generalSettingsInput struct {
-	DateFormat *string `json:"dateFormat"`
+	DateFormat       *string         `json:"dateFormat"`
+	PermissionFormat json.RawMessage `json:"permissionFormat"`
 }
 
 func defaultGeneralSettings() generalSettings {
-	return generalSettings{DateFormat: "locale"}
+	return generalSettings{DateFormat: "locale", PermissionFormat: "octal"}
 }
 
 func (input generalSettingsInput) settings() (generalSettings, error) {
-	if input.DateFormat != nil {
-		switch *input.DateFormat {
-		case "locale", "yyyy-MM-dd", "yyyy/MM/dd", "dd/MM/yyyy", "MM/dd/yyyy":
-			return generalSettings{DateFormat: *input.DateFormat}, nil
+	if input.DateFormat == nil {
+		return generalSettings{}, fail(http.StatusBadRequest, "通用设置格式错误")
+	}
+	switch *input.DateFormat {
+	case "locale", "yyyy-MM-dd", "yyyy/MM/dd", "dd/MM/yyyy", "MM/dd/yyyy":
+	default:
+		return generalSettings{}, fail(http.StatusBadRequest, "通用设置格式错误")
+	}
+	settings := defaultGeneralSettings()
+	settings.DateFormat = *input.DateFormat
+	if input.PermissionFormat != nil {
+		var format string
+		if err := json.Unmarshal(input.PermissionFormat, &format); err != nil {
+			return generalSettings{}, fail(http.StatusBadRequest, "通用设置格式错误")
+		}
+		switch format {
+		case "octal", "symbolic":
+			settings.PermissionFormat = format
+		default:
+			return generalSettings{}, fail(http.StatusBadRequest, "通用设置格式错误")
 		}
 	}
-	return generalSettings{}, fail(http.StatusBadRequest, "通用设置格式错误")
+	return settings, nil
 }
 
 func (s *Server) generalSettings(w http.ResponseWriter, r *http.Request) error {
