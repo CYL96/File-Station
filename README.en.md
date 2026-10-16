@@ -259,6 +259,34 @@ You may instead use `passwordFile` in JSON in place of `password` and mount the 
 
 In file mode, **Go configuration loading completely ignores `ConfigPath`, `PASSWORD`, and `UMASK`, regardless of whether they are empty or valid**; they cannot serve as JSON fallbacks. `PUID` / `PGID` still determine the container identity. However, the container entrypoint still validates `ConfigPath` and prepares the runtime state directory it specifies. It does not read JSON or change the preparation path based on `-config`. Normally, keep JSON `stateDir`, `ConfigPath`, and the persistent mount target aligned. If you intentionally use different paths, you must provide a persistent mount for JSON `stateDir` and prepare its directory and permissions yourself; the entrypoint will not prepare it. JSON must use container-side paths. In container file mode, explicitly set `ip: "0.0.0.0"`; otherwise, JSON's default `127.0.0.1` makes the service unreachable through port mappings. For HTTPS, set `secureCookies: true` in JSON. The static asset directory remains independently specified by an explicit `-static` argument.
 
+## GitHub Releases and binary installation
+
+Maintainers must set the same stable version in `internal/server/version.txt`, `web/package.json`, and `web/package-lock.json` (both the top-level and root-package versions), commit it, and merge it into `main`. Push a matching `vMAJOR.MINOR.PATCH` tag for that commit. For example, with version `1.0.0`:
+
+```sh
+git switch main
+git pull --ff-only
+git tag -a v1.0.0 -m "File Station v1.0.0"
+git push origin v1.0.0
+```
+
+`.github/workflows/release.yml` checks the stable tag format, matching versions, and that the commit is on the default branch. It builds and tests on native Linux amd64 and arm64 runners with Go 1.26 and Node.js 24. Prerelease tags such as `v1.0.0-rc.1` are not supported and will not publish.
+
+After both builds succeed, it generates release notes and publishes a GitHub Release containing `file-station-v1.0.0-linux-amd64.tar.gz`, `file-station-v1.0.0-linux-arm64.tar.gz`, and `SHA256SUMS`. Each archive has a matching top-level directory containing a static Go executable, `web/dist`, the license, and both READMEs; Nix is not required. Only after publication succeeds does it call the Cachix workflow to build and upload Nix packages from the same tagged commit. Ordinary pushes to `main` no longer automatically build the cache.
+
+Publication uses the automatic `GITHUB_TOKEN`; no personal access token is needed. Configure the repository variable `CACHIX_CACHE=cyl96-file-station` and secret `CACHIX_AUTH_TOKEN` with a per-cache write token. A build failure prevents release creation. An upload/publication failure may leave a draft; inspect and handle it before rerunning. Published releases are not overwritten and tags must not be moved; publish a new version for fixes. If only Cachix fails after publication, use **Re-run failed jobs** in Actions without publishing again. To build the default branch cache independently, manually run **Nix binary cache** on the default branch.
+
+Download the archive matching your architecture and `SHA256SUMS` from [Releases](https://github.com/CYL96/File-Station/releases). Verify and extract them in the download directory (amd64 `v1.0.0` example; `--ignore-missing` permits downloading only one architecture):
+
+```sh
+sha256sum --check --ignore-missing SHA256SUMS
+tar -xzf file-station-v1.0.0-linux-amd64.tar.gz
+cd file-station-v1.0.0-linux-amd64
+./file-station -config "$HOME/.config/file-station/config.json" -static ./web/dist
+```
+
+Prepare configuration, a private password, and a writable state directory as described above. Always run as a non-root user. When starting from another working directory, use an absolute path for `-static`. GitHub's automatically generated Source code archives are not binary installers. Nix clients should keep the official `https://cache.nixos.org` substituter alongside Cachix for shared dependencies.
+
 ## Nix package and NixOS service
 
 ```sh

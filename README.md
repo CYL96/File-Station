@@ -106,6 +106,34 @@ chmod 600 "$HOME/.config/file-station/config.json" "$HOME/.config/file-station/p
 
 打开 <http://127.0.0.1:8080>。配置和密码应放在所有共享之外。
 
+## GitHub Release 发布与安装
+
+维护者先将同一个正式版本写入 `internal/server/version.txt`、`web/package.json` 和 `web/package-lock.json`（顶层及根包版本），提交并合入 `main`，再为该提交推送 `vMAJOR.MINOR.PATCH` 标签。例如版本文件为 `1.0.0` 时：
+
+```sh
+git switch main
+git pull --ff-only
+git tag -a v1.0.0 -m "File Station v1.0.0"
+git push origin v1.0.0
+```
+
+`.github/workflows/release.yml` 自动校验标签格式、各版本一致性及提交已合入默认分支，使用 Go 1.26 / Node.js 24 构建和测试两个原生 Linux 架构。预发布标签（如 `v1.0.0-rc.1`）不支持，不会发布。
+
+构建全部成功后，自动生成更新说明并发布正式 GitHub Release，附件为 `file-station-v1.0.0-linux-amd64.tar.gz`、`file-station-v1.0.0-linux-arm64.tar.gz` 和 `SHA256SUMS`。每个压缩包包含同名顶级目录，内有静态 Go 二进制、`web/dist`、许可证及中英文说明，不依赖 Nix。Release 发布成功后才调用 Cachix 工作流，构建并上传同一标签提交的 Nix 包；普通 `main` 推送不再自动构建缓存。
+
+工作流使用自动提供的 `GITHUB_TOKEN` 发布 Release，无需新增个人访问令牌；Cachix 仍需下文的变量和密钥。发布前构建失败不会创建 Release；上传或发布失败时检查是否留有草稿，确认后处理再重跑。已正式发布的 Release 不会被工作流覆盖，标签不得移动；需要修复时发布新版本。若仅后续 Cachix 失败，在 Actions 中选择 **Re-run failed jobs**，无需重新发布 Release。
+
+用户从 [Releases](https://github.com/CYL96/File-Station/releases) 下载匹配架构的压缩包和 `SHA256SUMS`，在下载目录校验并解压（以下以 amd64 的 `v1.0.0` 为例；校验文件包含两个架构，`--ignore-missing` 允许只下载其中一个）：
+
+```sh
+sha256sum --check --ignore-missing SHA256SUMS
+tar -xzf file-station-v1.0.0-linux-amd64.tar.gz
+cd file-station-v1.0.0-linux-amd64
+./file-station -config "$HOME/.config/file-station/config.json" -static ./web/dist
+```
+
+先按前文准备配置、私有密码和可写状态目录，始终以非 root 用户运行。从其他工作目录启动时，将 `-static` 改为解压后 `web/dist` 的绝对路径。GitHub 自动附带的 Source code 压缩包不是二进制安装包。
+
 ## Nix / NixOS
 
 直接构建运行（配置同上；包装器已包含前端路径）：
@@ -173,9 +201,9 @@ journalctl -u file-station
 
 1. 在 [Cachix](https://app.cachix.org) 创建公共缓存，使用托管签名，并生成仅限该缓存的写入令牌。
 2. 在 GitHub **Settings → Secrets and variables → Actions** 设置变量 `CACHIX_CACHE` 和 secret `CACHIX_AUTH_TOKEN`；无需 `CACHIX_SIGNING_KEY`，令牌不得写入源码、Nix 配置或聊天。
-3. `.github/workflows/nix-cache.yml` 在 `main` 推送或手动运行时构建、上传 `x86_64-linux` 和 `aarch64-linux` 默认包及运行时闭包；只允许默认分支，两个架构均上传成功才算完成，缺少配置会失败。
+3. `.github/workflows/nix-cache.yml` 由 Release 工作流在正式发布成功后调用，构建并上传同一标签提交的 `x86_64-linux` 和 `aarch64-linux` 默认包。两个架构均上传成功才算缓存发布完成；缺少配置会失败，但不会撤回已发布的 Release。
 
-仅修改根目录 Markdown、`Dockerfile`、`docker-entrypoint.sh`、`compose.yaml` 或 `.dockerignore` 不自动触发，混合其他文件变更则触发。被过滤文件仍影响源码哈希，可能产生未上传路径；需要时在默认分支手动运行 **Actions → Nix binary cache**。参考 [Cachix 文档](https://docs.cachix.org/getting-started.html) / [cachix-action](https://github.com/cachix/cachix-action)。
+普通 `main` 推送（包括文档修改）不再自动触发缓存，旧的文件忽略规则不再需要；单独在网页创建 Release 也不会调用此链路。非发布提交不保证已有缓存，需要时可在默认分支手动运行 **Actions → Nix binary cache**。保留官方 `https://cache.nixos.org` 以下载通用依赖，`extra-substituters` 不会替换它。参考 [Cachix 文档](https://docs.cachix.org/getting-started.html) / [cachix-action](https://github.com/cachix/cachix-action)。
 
 ## 配置参考
 
