@@ -4,7 +4,7 @@
 
 A single-administrator web file manager for deployment as a regular Linux user, with Docker, or on NixOS. It combines a React + TypeScript frontend, a Go HTTP server, and persistent SQLite state. File contents stay directly in shared directories; refresh to see changes made on the host or through Samba.
 
-The application must run as a non-root user. It does not provide multi-user Linux identity mapping, privilege escalation, or system administration capabilities. **The first startup has no shares by default: home directories, mount points, and all other paths are never shared automatically.** After signing in, add directories manually in **Share settings**. In a container, mount the directory first, then add its container-side path.
+The application must run as a non-root user. It does not provide multi-user Linux identity mapping, privilege escalation, or system administration capabilities. **The first startup has no shares by default: home directories, mount points, and all other paths are never shared automatically.** After signing in, add directories manually in **Settings → Share settings**. In a container, mount the directory first, then add its container-side path.
 
 ## Interface preview
 
@@ -17,6 +17,7 @@ The screenshot uses demo data and the Chinese interface. A fresh installation st
 - Administrator password sign-in, 12-hour sessions, and CSRF protection. Passwords are hidden by default; use the eye button on the right of the input to show or hide them. A dedicated **Sign out** button appears at the top right, retaining both its icon and text on narrow screens.
 - Simplified Chinese and English on the sign-in page and throughout the application, with immediate switching through the language selector. Dates, numbers, and sorting adapt to the selected language. The initial language follows the browser language (Simplified Chinese for Chinese browsers, English otherwise). Manual choices are saved in the current browser and survive refreshes and sign-outs. Language switching still works when local storage is blocked, but the choice is not saved. Language settings do not change file names, share names, or file contents.
 - Browse and manage multiple shared directories, with read-only shares, name search within the current directory, sorting, multi-selection, and list/grid views. The grid shows only icons and names; choose a sort field and ascending/descending order from the **Sort** menu next to the select-all checkbox. Folders always appear before files. In list view, sort using column headers. Advanced settings can save hidden-item visibility and which list columns are shown. List headers and rows use matching column widths; scroll horizontally on narrow screens to see the remaining columns.
+- General settings lets you choose and preview a date display format, applied consistently to file modification/creation times, recycle-bin deletion times, and preview windows. Saved changes take effect immediately and persist across refreshes and restarts.
 - A sidebar starting with **Shared spaces**, with share navigation, the recycle bin, and keyboard shortcuts.
 - Create folders, rename, copy, move, upload, download, and calculate sizes. For name conflicts, skip, replace files, or keep both copies.
 - A recycle bin with restore and confirmed permanent deletion; background tasks, upload progress, cancellation, and retries after failure.
@@ -64,7 +65,7 @@ chmod 600 "$HOME/.config/file-station/config.json" "$HOME/.config/file-station/p
 /tmp/file-station -config "$HOME/.config/file-station/config.json" -static ./web/dist
 ```
 
-Open <http://127.0.0.1:8080> and add existing directories in **Share settings**. Alternatively, set `password` directly in JSON and remove `passwordFile`; exactly one of the two sources must be nonempty.
+Open <http://127.0.0.1:8080> and add existing directories in **Settings → Share settings**. Alternatively, set `password` directly in JSON and remove `passwordFile`; exactly one of the two sources must be nonempty.
 
 ### Updating an existing user service
 
@@ -112,7 +113,7 @@ Docker deployments use only the following five environment variables, without al
 
 Password files and configuration files containing passwords should have mode `0600`, remain outside all shares, and never be committed to the repository. Docker can use `PASSWORD` directly, but plaintext environment variables and Compose configuration can be read through `docker inspect` or by authorized host administrators. Do not commit passwords to version control or write them into image layers or the Nix store. Read-only JSON file mode is an option when you want less exposure through environment variables. Local deployments can continue using `passwordFile`; NixOS must use a runtime password file. Changes to the listener, password, umask, or other startup configuration require a restart. Saving shares through the UI does not.
 
-Close the share settings dialog using **Close** at the top right or the Esc key.
+The **Settings** gear button at the top opens the settings category page. Under **General settings**, choose the default format, `yyyy-MM-dd`, `yyyy/MM/dd`, `dd/MM/yyyy`, or `MM/dd/yyyy`. The default date format follows the interface language; fixed formats do not. All formats use the browser's local time zone and a 24-hour clock, including hours, minutes, and seconds. Click **Save general settings** to apply your selection. Use **Share settings** to manage shared directories and access permissions. **Back to settings** returns to the category page while retaining unsaved edits within the current dialog. Use **Close** at the top right or Esc to close settings; reopening returns to the category page. Settings cannot be closed or returned to the category page while saving settings or refreshing share status. The language selector remains separate, and settings pages follow the selected language. **Advanced settings** still opens separately from the file toolbar.
 
 ### Directory permissions and persistent state
 
@@ -132,7 +133,7 @@ The persistent state directory is specified by `ConfigPath` in environment-varia
 
 Each entry requires `name` and `path`. Omit `id` to generate it automatically; `readOnly` defaults to `false`. Preserve the existing state database and share IDs to avoid breaking task and recycle-bin associations.
 
-After initialization, add, edit, and remove shares in **Share settings**; saved changes take effect immediately. Removing a share deletes only its configuration, not directory contents. While any file request (including uploads and downloads) is being processed, share changes temporarily return HTTP 409. A share also cannot be modified or removed while it has active background tasks. A nonempty recycle bin prevents changing the path or removing the share; restore or permanently delete its contents first. When a directory disappears, a mount is not ready, or permissions are insufficient, saved shares are retained and marked unavailable, never automatically deleted or migrated.
+After initialization, add, edit, and remove shares in **Settings → Share settings**; saved changes take effect immediately. Removing a share deletes only its configuration, not directory contents. While any file request (including uploads and downloads) is being processed, share changes temporarily return HTTP 409. A share also cannot be modified or removed while it has active background tasks. A nonempty recycle bin prevents changing the path or removing the share; restore or permanently delete its contents first. When a directory disappears, a mount is not ready, or permissions are insufficient, saved shares are retained and marked unavailable, never automatically deleted or migrated.
 
 ## Docker / Compose
 
