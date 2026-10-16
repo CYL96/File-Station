@@ -22,7 +22,45 @@
 
 ### Docker / Compose
 
-以下在仓库根目录操作，使用仓库的 Dockerfile 本地构建镜像。在此目录创建私有 `.env`（权限 `0600`，勿提交版本库）：
+默认使用 GHCR 发布镜像，仅需 Docker Engine 和 Compose 插件，**无需克隆仓库或安装 Go、Node.js**。选择一个部署目录，例如：
+
+```sh
+mkdir -p "$HOME/file-station"
+cd "$HOME/file-station"
+```
+
+在该目录创建 `compose.yaml`：
+
+```yaml
+name: file-station
+
+services:
+  file-station:
+    image: ghcr.io/cyl96/file-station:latest
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:8080"
+    environment:
+      PUID: "${PUID-1000}"
+      PGID: "${PGID-1000}"
+      UMASK: "${UMASK-0022}"
+      PASSWORD: "${PASSWORD-}"
+      ConfigPath: "${ConfigPath-/var/lib/file-station}"
+    volumes:
+      - "./state:${ConfigPath-/var/lib/file-station}"
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
+    security_opt:
+      - no-new-privileges:true
+```
+
+发布镜像支持 `linux/amd64` 和 `linux/arm64`，Docker 会自动选择宿主架构。`latest` 跟随最新正式版本；如需固定版本，将 `image` 改为 `ghcr.io/cyl96/file-station:X.Y.Z`，标签不带 `v`。例如 `ghcr.io/cyl96/file-station:1.0.0` **仅为格式示例，须替换为实际已发布的版本**；使用前请核对 [Releases](https://github.com/CYL96/File-Station/releases) 对应的镜像标签。
+
+在同一目录创建私有 `.env`（勿提交版本库），内容如下：
 
 ```dotenv
 PUID=1000
@@ -32,20 +70,27 @@ PASSWORD='replace-with-your-own-long-password'
 ConfigPath='/var/lib/file-station'
 ```
 
+创建后限制文件权限：
+
+```sh
+chmod 600 .env
+```
+
 将 `PUID` / `PGID` 改为有权访问数据的非 root UID/GID（可用 `id -u` / `id -g` 查看），并替换密码。密码至少 6 字节，建议 12 字节以上；`.env` 中用单引号避免 `$` 插值，直接写在 Compose YAML 中的 `$` 则须写成 `$$`。
 
 ```sh
 mkdir -p state
-docker compose up -d --build
+docker compose pull
+docker compose up -d
 ```
 
-打开 <http://127.0.0.1:8080>。应用在容器内默认监听 `0.0.0.0:8080`，仓库 Compose 仅发布到宿主回环地址。`./state` 持久挂载到 `ConfigPath`；例如设为 `/config` 时，挂载自动变为 `./state:/config`。**`ConfigPath` 是状态目录，不是 config.json 路径。** 对外访问须显式调整端口映射与防火墙，并阅读[密码与网络](#密码与网络)。
+打开 <http://127.0.0.1:8080>。应用在容器内默认监听 `0.0.0.0:8080`，上例仅发布到宿主回环地址。`./state` 持久挂载到 `ConfigPath`；例如设为 `/config` 时，挂载自动变为 `./state:/config`。**`ConfigPath` 是状态目录，不是 config.json 路径。** 对外访问须显式调整端口映射与防火墙，并阅读[密码与网络](#密码与网络)。
 
 在 `compose.yaml` 现有 `volumes` 中额外挂载共享数据，例如：
 
 ```yaml
-      - /srv/documents:/mnt/documents
-      # - /srv/archive:/mnt/archive:ro
+      - "/srv/documents:/mnt/documents"
+      # - "/srv/shared archive:/mnt/archive:ro"
 ```
 
 重建容器后，在页面添加 `/mnt/documents`，不是宿主路径。未挂载的宿主目录不可见，挂载也不会自动创建共享。
@@ -53,8 +98,8 @@ docker compose up -d --build
 #### 容器身份与权限
 
 - root 入口默认使用 `1000:1000`，只准备状态目录本身，再通过 `su-exec` 降权；不递归修改状态内容或共享。`PUID` / `PGID` 仅接受 `1`–`4294967294` 的十进制整数，无前导零，不能留空。
-- 默认无需 `user:`。若指定非 root `--user UID:GID`，未设置的 `PUID` / `PGID` 沿用当前身份；显式不匹配则报错。须提前准备状态目录属主，入口不会提权。仓库 Compose 默认显式传入 `PUID` / `PGID`，使用 `user:` 时须同步调整。
-- 保留仓库 Compose 的 `cap_drop: ALL`、仅添加的 `CHOWN` / `SETUID` / `SETGID` 和 `no-new-privileges`。`su-exec` 会清空附加组，不能依赖 `group_add`；按实际 UID、主组或 ACL 授权。rootless Docker 还需考虑宿主 UID 映射。
+- 默认无需 `user:`。若指定非 root `--user UID:GID`，未设置的 `PUID` / `PGID` 沿用当前身份；显式不匹配则报错。须提前准备状态目录属主，入口不会提权。上例默认显式传入 `PUID` / `PGID`，使用 `user:` 时须同步调整。
+- 保留上例的 `cap_drop: ALL`、仅添加的 `CHOWN` / `SETUID` / `SETGID` 和 `no-new-privileges`。`su-exec` 会清空附加组，不能依赖 `group_add`；按实际 UID、主组或 ACL 授权。rootless Docker 还需考虑宿主 UID 映射。
 - **已有状态更换 UID/GID：先停服务、备份，再迁移整个状态目录的属主，保留内容与权限。不要删除数据库，也不要递归 chown 共享数据。**
 
 #### 容器 JSON 模式
@@ -64,13 +109,24 @@ docker compose up -d --build
 ```yaml
     volumes:
       - './state:${ConfigPath-/var/lib/file-station}'
-      - ./config.json:/etc/file-station/config.json:ro
+      - "./config.json:/etc/file-station/config.json:ro"
     command: ["-config", "/etc/file-station/config.json", "-static", "/usr/share/file-station"]
 ```
 
 合并到已有 `volumes`，不要重复声明该键。JSON 可使用 `password`，或使用 `passwordFile` 并额外只读挂载密码文件；两者只能选一个非空来源。配置及密码须对运行 UID 可读，放在共享之外。覆盖镜像命令时必须保留 `-static`。
 
 JSON 模式下 Go 忽略 `ConfigPath`、`PASSWORD`、`UMASK`，但容器入口仍校验并准备 `ConfigPath`，不会读取 JSON；若与 `stateDir` 不同，实际状态目录的持久挂载和权限须自行准备。仅修改状态目录不需要切换 JSON 模式。
+
+#### 可选：从本地源码构建
+
+仓库中的 `compose.yaml` 仍使用 `build: .` 和 `image: file-station:local`。如需本地构建，获取源码后在仓库根目录按上文创建并设置私有 `.env`（同样执行 `chmod 600 .env`），然后运行：
+
+```sh
+mkdir -p state
+docker compose up -d --build
+```
+
+已有仓库部署如需改用发布镜像，删除 Compose 服务中的 `build`，将 `image` 改为 `ghcr.io/cyl96/file-station:latest` 或实际已发布的固定版本标签；保留原 `.env`、状态目录、挂载、身份及安全设置，按下方[常规升级](#常规升级)的发布镜像步骤切换，**不要重置状态或删除数据库**。
 
 ### 预编译二进制
 
@@ -232,7 +288,7 @@ chmod 600 "$HOME/.config/file-station/config.json" "$HOME/.config/file-station/p
 | `ConfigPath` | `/var/lib/file-station`，大小写精确；状态目录而非 JSON 路径。须为非空绝对目录，不能规范化或解析为 `/`；容器还要求目录本身不是符号链接。Go 的 JSON 模式忽略它，但容器入口仍使用它 |
 | `PUID` / `PGID` | 仅容器身份设置，规则见[容器身份与权限](#容器身份与权限)，不属于应用配置 |
 
-普通路径可含空格。仓库 Compose 只透传上述五项变量，不自动透传其他宿主变量，不提供短名或旧名别名。
+普通路径可含空格。上面的 Compose 示例只透传上述五项变量，不自动透传其他宿主变量，不提供短名或旧名别名。
 
 可选 JSON 首次导入：`"shares": [{"id":"documents","name":"文档","path":"/srv/documents","readOnly":false}]`。`name`、`path` 必填，`id` 可省略，`readOnly` 默认 `false`；NixOS 对应 `shares.documents = { name = "文档"; path = "/srv/documents"; readOnly = false; };`，属性名是共享 ID。**即使最初为空，之后修改配置、重启或回滚 generation 也不会重新导入**，请在页面管理共享。
 
@@ -285,7 +341,8 @@ chmod 600 "$HOME/.config/file-station/config.json" "$HOME/.config/file-station/p
 
 | 安装方式 | 更新方式 |
 | --- | --- |
-| Docker / Compose | 更新本地仓库到目标版本，保留 `.env`、挂载和 `./state`，运行 `docker compose up -d --build` 重建容器 |
+| Docker / Compose（发布镜像） | 将 `image` 设为目标发布标签，运行 `docker compose pull`；`docker compose stop` 后完成上述一致备份，再运行 `docker compose up -d`。保留 `.env`、`./state`、挂载和运行 UID/GID |
+| Docker / Compose（本地源码构建） | 更新本地仓库到目标版本，保留 `.env`、`./state`、挂载和运行 UID/GID；停服务并完成上述一致备份后，运行 `docker compose up -d --build` |
 | 预编译二进制 | 下载目标版本及校验和，校验并解压到新目录；停止旧进程，将启动命令或服务改为新二进制和配套 `web/dist`，使用原配置启动 |
 | 源码构建 | 更新源码后重新构建前后端；停止旧进程，部署配套产物并使用原配置启动 |
 | Nix 包 | 更新源码或 flake 锁定版本，重新 `nix build`，将启动路径切换到新包并重启；已有用户服务见下节 |

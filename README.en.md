@@ -22,7 +22,45 @@ The screenshot uses demo data and the Chinese interface. A fresh installation st
 
 ### Docker / Compose
 
-Run the following from the repository root, using the repository's Dockerfile to build the image locally. Create a private `.env` in this directory (mode `0600`, never committed):
+Use GHCR release images by default. Only Docker Engine and the Compose plugin are required; **no repository clone, Go, or Node.js is needed**. Choose a deployment directory, for example:
+
+```sh
+mkdir -p "$HOME/file-station"
+cd "$HOME/file-station"
+```
+
+Create `compose.yaml` in that directory:
+
+```yaml
+name: file-station
+
+services:
+  file-station:
+    image: ghcr.io/cyl96/file-station:latest
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:8080"
+    environment:
+      PUID: "${PUID-1000}"
+      PGID: "${PGID-1000}"
+      UMASK: "${UMASK-0022}"
+      PASSWORD: "${PASSWORD-}"
+      ConfigPath: "${ConfigPath-/var/lib/file-station}"
+    volumes:
+      - "./state:${ConfigPath-/var/lib/file-station}"
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
+    security_opt:
+      - no-new-privileges:true
+```
+
+Release images support `linux/amd64` and `linux/arm64`; Docker automatically selects the host architecture. `latest` tracks the newest stable release. To pin a version, change `image` to `ghcr.io/cyl96/file-station:X.Y.Z`, without a `v` in the tag. For example, `ghcr.io/cyl96/file-station:1.0.0` **only illustrates the format; replace it with an actually published version**. Check the image tag for the corresponding [Release](https://github.com/CYL96/File-Station/releases) before use.
+
+Create a private `.env` in the same directory (never commit it) with these contents:
 
 ```dotenv
 PUID=1000
@@ -32,20 +70,27 @@ PASSWORD='replace-with-your-own-long-password'
 ConfigPath='/var/lib/file-station'
 ```
 
+After creating the file, restrict its permissions:
+
+```sh
+chmod 600 .env
+```
+
 Set `PUID` / `PGID` to a non-root UID/GID with access to your data (use `id -u` / `id -g` to check), and replace the password. Passwords must be at least 6 bytes; 12 or more is recommended. Single-quote the password in `.env` to avoid `$` interpolation; a `$` written directly in Compose YAML must instead be escaped as `$$`.
 
 ```sh
 mkdir -p state
-docker compose up -d --build
+docker compose pull
+docker compose up -d
 ```
 
-Open <http://127.0.0.1:8080>. The application defaults to listening on `0.0.0.0:8080` inside the container, while the repository's Compose configuration publishes only to the host loopback address. `./state` is persistently mounted at `ConfigPath`; setting it to `/config`, for example, automatically changes the mount to `./state:/config`. **`ConfigPath` is the state directory, not a config.json path.** External access requires explicitly changing the port mapping and firewall; see [Passwords and networking](#passwords-and-networking).
+Open <http://127.0.0.1:8080>. The application defaults to listening on `0.0.0.0:8080` inside the container, while the example above publishes only to the host loopback address. `./state` is persistently mounted at `ConfigPath`; setting it to `/config`, for example, automatically changes the mount to `./state:/config`. **`ConfigPath` is the state directory, not a config.json path.** External access requires explicitly changing the port mapping and firewall; see [Passwords and networking](#passwords-and-networking).
 
 Add shared-data mounts to the existing `volumes` in `compose.yaml`, for example:
 
 ```yaml
-      - /srv/documents:/mnt/documents
-      # - /srv/archive:/mnt/archive:ro
+      - "/srv/documents:/mnt/documents"
+      # - "/srv/shared archive:/mnt/archive:ro"
 ```
 
 After recreating the container, add `/mnt/documents` in the UI, not the host path. Unmounted host directories are invisible, and mounting a directory does not automatically create a share.
@@ -53,8 +98,8 @@ After recreating the container, add `/mnt/documents` in the UI, not the host pat
 #### Container identity and permissions
 
 - The root entrypoint defaults to `1000:1000`, prepares only the state directory itself, then drops privileges with `su-exec`. It does not recursively change state contents or shared data. `PUID` / `PGID` accept only decimal integers from `1` to `4294967294`, without leading zeros; empty values are invalid.
-- No `user:` setting is needed by default. With an explicit non-root `--user UID:GID`, unset `PUID` / `PGID` inherit that identity; explicitly conflicting values cause an error. Prepare state-directory ownership beforehand: the entrypoint does not elevate privileges. The repository's Compose configuration explicitly passes `PUID` / `PGID` by default, so adjust them to match when using `user:`.
-- Keep the repository's `cap_drop: ALL`, only the added `CHOWN` / `SETUID` / `SETGID` capabilities, and `no-new-privileges`. `su-exec` clears supplementary groups, so do not rely on `group_add`; grant access through the actual UID, primary group, or ACLs. Rootless Docker also requires accounting for host UID mappings.
+- No `user:` setting is needed by default. With an explicit non-root `--user UID:GID`, unset `PUID` / `PGID` inherit that identity; explicitly conflicting values cause an error. Prepare state-directory ownership beforehand: the entrypoint does not elevate privileges. The example above explicitly passes `PUID` / `PGID` by default, so adjust them to match when using `user:`.
+- Keep the example's `cap_drop: ALL`, only the added `CHOWN` / `SETUID` / `SETGID` capabilities, and `no-new-privileges`. `su-exec` clears supplementary groups, so do not rely on `group_add`; grant access through the actual UID, primary group, or ACLs. Rootless Docker also requires accounting for host UID mappings.
 - **When changing UID/GID for existing state, stop the service, back up, and migrate ownership of the entire state directory while preserving contents and permissions. Do not delete the database or recursively chown shared data.**
 
 #### Container JSON mode
@@ -64,13 +109,24 @@ To customize the listener, enable secure cookies, or use a password file, use th
 ```yaml
     volumes:
       - './state:${ConfigPath-/var/lib/file-station}'
-      - ./config.json:/etc/file-station/config.json:ro
+      - "./config.json:/etc/file-station/config.json:ro"
     command: ["-config", "/etc/file-station/config.json", "-static", "/usr/share/file-station"]
 ```
 
 Merge with the existing `volumes`; do not declare that key twice. JSON can use `password`, or `passwordFile` with an additional read-only password-file mount; exactly one source must be nonempty. Configuration and passwords must be readable by the runtime UID and remain outside shares. Keep `-static` when overriding the image command.
 
 In JSON mode, Go ignores `ConfigPath`, `PASSWORD`, and `UMASK`, but the container entrypoint still validates and prepares `ConfigPath` without reading JSON. If it differs from `stateDir`, you must provide persistent storage and permissions for the actual state directory yourself. Changing only the state directory does not require JSON mode.
+
+#### Optional: build from local source
+
+The repository's `compose.yaml` still uses `build: .` and `image: file-station:local`. To build locally, obtain the source and, from the repository root, create and secure the private `.env` as described above (including `chmod 600 .env`), then run:
+
+```sh
+mkdir -p state
+docker compose up -d --build
+```
+
+To switch an existing repository deployment to release images, remove `build` from the Compose service and replace `image` with `ghcr.io/cyl96/file-station:latest` or an actually published fixed version tag. Retain the original `.env`, state directory, mounts, identity, and security settings, and follow the release-image steps under [Regular upgrades](#regular-upgrades) below. **Do not reset state or delete the database.**
 
 ### Prebuilt binaries
 
@@ -232,7 +288,7 @@ The two sources **are not combined**. Restart after changing startup configurati
 | `ConfigPath` | `/var/lib/file-station`, case-sensitive; the state directory, not a JSON path. Must be a nonempty absolute directory that does not normalize or resolve to `/`; containers also require that the directory itself is not a symlink. Go JSON mode ignores it, but the container entrypoint still uses it |
 | `PUID` / `PGID` | Container identity only, not application configuration; see [Container identity and permissions](#container-identity-and-permissions) |
 
-Ordinary paths may contain spaces. The repository's Compose configuration passes only these five variables, not other host variables automatically, and offers no short-name or legacy aliases.
+Ordinary paths may contain spaces. The Compose example above passes only these five variables, not other host variables automatically, and offers no short-name or legacy aliases.
 
 Optional initial JSON import: `"shares": [{"id":"documents","name":"文档","path":"/srv/documents","readOnly":false}]`. `name` and `path` are required, `id` may be omitted, and `readOnly` defaults to `false`. The NixOS equivalent is `shares.documents = { name = "文档"; path = "/srv/documents"; readOnly = false; };`, where the attribute name is the share ID. **Even an initially empty list completes initialization: later configuration changes, restarts, and generation rollbacks do not reimport shares.** Manage shares through the UI afterward.
 
@@ -285,7 +341,8 @@ Read the target version's release notes, prepare the new version, then stop the 
 
 | Installation method | How to update |
 | --- | --- |
-| Docker / Compose | Update the local repository to the target version, retain `.env`, mounts, and `./state`, then run `docker compose up -d --build` to recreate the container |
+| Docker / Compose (release image) | Set `image` to the target release tag and run `docker compose pull`; run `docker compose stop` and complete the consistent backup described above before `docker compose up -d`. Preserve `.env`, `./state`, mounts, and runtime UID/GID |
+| Docker / Compose (local-source build) | Update the local repository to the target version, preserving `.env`, `./state`, mounts, and runtime UID/GID. Stop the service and complete the consistent backup described above, then run `docker compose up -d --build` |
 | Prebuilt binary | Download the target version and checksums, verify, and extract into a new directory. Stop the old process, update the command or service to use the new executable and matching `web/dist`, and start with the original configuration |
 | Source build | Update source and rebuild both frontend and backend. Stop the old process, deploy matching outputs, and start with the original configuration |
 | Nix package | Update source or the locked flake version, run `nix build` again, switch the startup path to the new package, and restart. For existing user services, see below |
