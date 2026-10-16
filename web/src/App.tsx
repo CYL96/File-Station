@@ -18,6 +18,7 @@ import { formatDate } from './dateFormat';
 import { defaultGeneralSettings } from './generalSettings';
 import { formatPermissions } from './permissionFormat';
 import { LanguageSwitcher, useI18n } from './i18n';
+import { useSidebarResize } from './useSidebarResize';
 
 type Item = Entry & { trashId?: string; deletedAt?: string };
 type View = { share: string; path: string; trash: boolean };
@@ -57,6 +58,7 @@ export default function App() {
   const [notice, setNotice] = useState<{ text: string; error: boolean } | null>(null);
   const [drawer, setDrawer] = useState(false);
   const [sidebar, setSidebar] = useState(false);
+  const sidebarResize = useSidebarResize(!!session && !checking);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [uploads, setUploads] = useState<UploadTask[]>([]);
   const [retryingTasks, setRetryingTasks] = useState<Set<string>>(new Set());
@@ -575,7 +577,7 @@ export default function App() {
   if (picked.length) actions.push({ label: '计算大小', icon: 'server', disabled: false, run: () => { setSizeSelection({ share: view.share, trash: view.trash, items: picked.map(entry => ({ path: entry.trashId ?? entry.path, name: entry.name })) }); } });
   return <div className="desktop">
     <header className="desktop-topbar"><a className="desktop-brand" href="/" onClick={event => { event.preventDefault(); if (shares[0]) navigate(shares[0].id); }}>{t('文件管理工作空间')}</a><div className="topbar-right"><LanguageSwitcher /><button className="topbar-button settings-entry" onClick={() => { setDrawer(false); setSidebar(false); setContextMenu(null); setModal({ kind: 'settings' }); }} aria-label={t('设置')}><Icon name="settings" /><span>{t('设置')}</span></button><button className={`topbar-button ${drawer ? 'active' : ''}`} onClick={() => setDrawer(!drawer)} aria-label={t('任务中心')} aria-expanded={drawer}><Icon name="tasks" /><span className="topbar-button-text">{t('任务中心')}</span>{running > 0 && <span className="task-badge">{running}</span>}</button><button className="topbar-button logout-button" aria-label={t('退出登录')} onClick={async () => { try { await request('logout', {}); clearAuth(); } catch (error) { notify(error instanceof Error ? error.message : '退出失败', true); } }}><Icon name="logout" size={18} /><span>{t('退出登录')}</span></button></div></header>
-    <div className="workspace"><aside className={`sidebar ${sidebar ? 'sidebar-open' : ''}`}><div className="sidebar-label">{t('共享空间')} <span>{shares.length}</span></div><DirectoryTree key={shareRevision} shares={shares} currentShare={view.share} currentPath={view.path} trash={view.trash} refresh={refresh} showHidden={showHidden} navigate={navigate} /><div className="sidebar-rule" /><button className={`share-button trash-link ${view.trash ? 'selected' : ''}`} onClick={() => { if (view.share) navigate(view.share, '', true); }} disabled={!view.share}><Icon name="trash" /><span>{t('回收站')}</span></button><div className="sidebar-bottom"><button className="shortcut-link" onClick={() => setModal({ kind: 'help' })}><Icon name="help" size={16} />{t('键盘快捷键')}<span>?</span></button></div></aside>{sidebar && <button className="sidebar-backdrop" aria-label={t('收起导航')} onClick={() => setSidebar(false)} />}
+    <div className="workspace"><aside id="sidebar-navigation" ref={sidebarResize.sidebarRef} style={sidebarResize.sidebarStyle} className={`sidebar ${sidebar ? 'sidebar-open' : ''} ${sidebarResize.resizing ? 'sidebar-resize-active' : ''}`}><div className="sidebar-label">{t('共享空间')} <span>{shares.length}</span></div><DirectoryTree key={shareRevision} shares={shares} currentShare={view.share} currentPath={view.path} trash={view.trash} refresh={refresh} showHidden={showHidden} navigate={navigate} /><div className="sidebar-rule" /><button className={`share-button trash-link ${view.trash ? 'selected' : ''}`} onClick={() => { if (view.share) navigate(view.share, '', true); }} disabled={!view.share}><Icon name="trash" /><span>{t('回收站')}</span></button><div className="sidebar-bottom"><button className="shortcut-link" onClick={() => setModal({ kind: 'help' })}><Icon name="help" size={16} />{t('键盘快捷键')}<span>?</span></button></div><div {...sidebarResize.separatorProps} className="sidebar-resize-handle" aria-label={t('调整侧栏宽度')} title={t('左右拖动或使用左右方向键调整宽度；双击或按 Home 恢复默认')} /></aside>{sidebar && <button className="sidebar-backdrop" aria-label={t('收起导航')} onClick={() => setSidebar(false)} />}
       <main className="file-main">
         <input className="sr-only" ref={fileInput} type="file" multiple aria-label={t('选择上传文件')} onChange={event => { queueUploads(Array.from(event.target.files ?? [])); event.target.value = ''; }} />
         <section className="file-panel" aria-label={t(view.trash ? '回收站文件' : '文件列表')} onDragOver={event => { if (!readOnly && !view.trash && event.dataTransfer.types.includes('Files')) { event.preventDefault(); setDragging(true); } }} onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragging(false); }} onDrop={event => { event.preventDefault(); setDragging(false); queueUploads(Array.from(event.dataTransfer.files)); }}>
@@ -614,8 +616,8 @@ export default function App() {
         </div>
       </aside>
     </>}
-    {modal?.kind === 'settings' && <Settings generalSettings={generalSettings} generalLoading={generalLoading} generalError={generalError} onSaveGeneral={saveGeneralSettings} onClose={() => setModal(null)} onChanged={refreshShares} />}
-    {modal?.kind === 'advanced' && <AdvancedSettings value={fileSettings} onClose={() => setModal(null)} onAbout={() => setModal({ kind: 'about' })} onSaved={data => { setFileSettings(data); setSelected(new Set()); anchor.current = null; setContextMenu(null); setModal(null); notify('高级设置已保存'); }} />}
+    {modal?.kind === 'settings' && <Settings generalSettings={generalSettings} generalLoading={generalLoading} generalError={generalError} onSaveGeneral={saveGeneralSettings} onClose={() => setModal(null)} onAbout={() => setModal({ kind: 'about' })} onChanged={refreshShares} />}
+    {modal?.kind === 'advanced' && <AdvancedSettings value={fileSettings} onClose={() => setModal(null)} onSaved={data => { setFileSettings(data); setSelected(new Set()); anchor.current = null; setContextMenu(null); setModal(null); notify('高级设置已保存'); }} />}
     {modal?.kind === 'about' && <About onClose={() => setModal(null)} />}
     {modal?.kind === 'edit' && <TextEditor share={modal.share} path={modal.entry.path} name={modal.entry.name} onClose={() => setModal(null)} onSaved={() => setRefresh(value => value + 1)} />}
     {modal?.kind === 'mkdir' && !conflict && <NameDialog title={t('新建文件夹')} label="文件夹名称" initialName="" onClose={() => setModal(null)} onSubmit={async name => { await request('mkdir', { share: view.share, path: view.path, name }); setModal(null); setRefresh(value => value + 1); notify('文件夹已创建'); }} />}

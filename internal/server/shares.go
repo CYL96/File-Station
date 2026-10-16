@@ -2,7 +2,10 @@ package server
 
 import (
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -178,7 +181,43 @@ func (s *Server) loadShares() error {
 		}
 		s.shares = append(s.shares, opened)
 	}
-	return rows.Err()
+	if err = rows.Err(); err != nil {
+		return err
+	}
+	if err = rows.Close(); err != nil {
+		return err
+	}
+	var document string
+	err = s.db.QueryRow("SELECT value FROM settings_meta WHERE key='shares_order'").Scan(&document)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var ids []string
+	if err = json.Unmarshal([]byte(document), &ids); err != nil {
+		return fmt.Errorf("invalid saved share order: %w", err)
+	}
+	byID := make(map[string]int, len(s.shares))
+	for i, sh := range s.shares {
+		byID[sh.ID] = i
+	}
+	ordered := make([]Share, 0, len(s.shares))
+	for _, id := range ids {
+		if index, ok := byID[id]; ok {
+			ordered = append(ordered, s.shares[index])
+			delete(byID, id)
+		}
+	}
+	// Ignore stale IDs and append shares absent from older order documents.
+	for _, sh := range s.shares {
+		if _, ok := byID[sh.ID]; ok {
+			ordered = append(ordered, sh)
+		}
+	}
+	s.shares = ordered
+	return nil
 }
 
 // Hold the root handles for each request, including streaming downloads/uploads.
@@ -200,6 +239,68 @@ func (s *Server) sharedSettings(w http.ResponseWriter, r *http.Request) error {
 	jsonResponse(w, map[string]any{"shares": result})
 	return nil
 }
+
+// Caller must hold sharesMu while reading the shared list.
+func (s *Server) shareList() []map[string]any {
+	result := make([]map[string]any, 0, len(s.shares))
+	for _, sh := range s.shares {
+		result = append(result, map[string]any{"id": sh.ID, "name": sh.Name, "readOnly": sh.ReadOnly})
+	}
+	return result
+}
+
+func saveShareOrder(tx *sql.Tx, ids []string) error {
+	document, err := json.Marshal(ids)
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec("INSERT INTO settings_meta(key,value) VALUES('shares_order',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", string(document))
+	return err
+}
+
+func (s *Server) reorderShares(w http.ResponseWriter, r *http.Request) error {
+	var b struct {
+		IDs []string `json:"ids"`
+	}
+	if err := decode(w, r, &b); err != nil {
+		return err
+	}
+	if !s.sharesMu.TryLock() {
+		return fail(409, "文件请求或上传正在进行，请稍后重试")
+	}
+	defer s.sharesMu.Unlock()
+	if b.IDs == nil || len(b.IDs) != len(s.shares) {
+		return fail(400, "共享顺序必须包含全部共享且不能重复")
+	}
+	byID := make(map[string]int, len(s.shares))
+	for i, sh := range s.shares {
+		byID[sh.ID] = i
+	}
+	ordered := make([]Share, 0, len(s.shares))
+	for _, id := range b.IDs {
+		index, ok := byID[id]
+		if !ok {
+			return fail(400, "共享顺序必须包含全部共享且不能重复")
+		}
+		ordered = append(ordered, s.shares[index])
+		delete(byID, id)
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err = saveShareOrder(tx, b.IDs); err != nil {
+		return err
+	}
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+	s.shares = ordered
+	jsonResponse(w, s.shareList())
+	return nil
+}
+
 func (s *Server) settingsDirectories(w http.ResponseWriter, r *http.Request) error {
 	p := r.URL.Query().Get("path")
 	if p == "" {
@@ -309,8 +410,26 @@ func (s *Server) saveShare(w http.ResponseWriter, r *http.Request) error {
 			return fail(409, "回收站非空，请先恢复或永久删除后更改路径")
 		}
 	}
-	_, err = s.db.Exec("INSERT INTO shared_settings(id,name,path,read_only) VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,path=excluded.path,read_only=excluded.read_only", sh.ID, sh.Name, sh.Path, sh.ReadOnly)
+	tx, err := s.db.Begin()
 	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	_, err = tx.Exec("INSERT INTO shared_settings(id,name,path,read_only) VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,path=excluded.path,read_only=excluded.read_only", sh.ID, sh.Name, sh.Path, sh.ReadOnly)
+	if err != nil {
+		return err
+	}
+	if index < 0 {
+		ids := make([]string, len(s.shares)+1)
+		for i, current := range s.shares {
+			ids[i] = current.ID
+		}
+		ids[len(s.shares)] = sh.ID
+		if err = saveShareOrder(tx, ids); err != nil {
+			return err
+		}
+	}
+	if err = tx.Commit(); err != nil {
 		return err
 	}
 	if index < 0 {
@@ -351,7 +470,24 @@ func (s *Server) removeShare(w http.ResponseWriter, r *http.Request) error {
 		if has {
 			return fail(409, "回收站非空，请先恢复或永久删除后移除共享")
 		}
-		if _, err = s.db.Exec("DELETE FROM shared_settings WHERE id=?", b.ID); err != nil {
+		tx, err := s.db.Begin()
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+		if _, err = tx.Exec("DELETE FROM shared_settings WHERE id=?", b.ID); err != nil {
+			return err
+		}
+		ids := make([]string, 0, len(s.shares)-1)
+		for _, current := range s.shares {
+			if current.ID != b.ID {
+				ids = append(ids, current.ID)
+			}
+		}
+		if err = saveShareOrder(tx, ids); err != nil {
+			return err
+		}
+		if err = tx.Commit(); err != nil {
 			return err
 		}
 		if sh.root != nil {

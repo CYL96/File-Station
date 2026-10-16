@@ -433,3 +433,201 @@ func TestWithinFilesystemRoot(t *testing.T) {
 		t.Fatal("sibling prefix incorrectly treated as descendant")
 	}
 }
+
+func newShareOrderFixture(t *testing.T, ids ...string) *fileSettingsFixture {
+	t.Helper()
+	f := newFileSettingsFixture(t)
+	// Model an existing database with rowid order and no ordering metadata.
+	for _, id := range ids {
+		if _, err := f.app.db.Exec("INSERT INTO shared_settings(id,name,path,read_only) VALUES(?,?,?,0)", id, id, t.TempDir()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f.stop()
+	f.start()
+	return f
+}
+
+func assertShareOrder(t *testing.T, f *fileSettingsFixture, want ...string) []Share {
+	t.Helper()
+	var sidebar []Share
+	if err := json.Unmarshal(f.request("GET", "/api/shares", "", 200), &sidebar); err != nil {
+		t.Fatal(err)
+	}
+	var settings struct{ Shares []Share }
+	if err := json.Unmarshal(f.request("GET", "/api/settings/shares", "", 200), &settings); err != nil {
+		t.Fatal(err)
+	}
+	if len(sidebar) != len(want) || len(settings.Shares) != len(want) {
+		t.Fatalf("sidebar/settings lengths = %d/%d, want %d", len(sidebar), len(settings.Shares), len(want))
+	}
+	for i, id := range want {
+		if sidebar[i].ID != id || settings.Shares[i].ID != id {
+			t.Fatalf("share at %d = sidebar %q, settings %q, want %q", i, sidebar[i].ID, settings.Shares[i].ID, id)
+		}
+		if sidebar[i].Path != "" || sidebar[i].Name != settings.Shares[i].Name || sidebar[i].ReadOnly != settings.Shares[i].ReadOnly {
+			t.Fatalf("sidebar/settings metadata differs at %d: %+v / %+v", i, sidebar[i], settings.Shares[i])
+		}
+	}
+	return settings.Shares
+}
+
+func TestShareOrderPersistenceAndLifecycle(t *testing.T) {
+	f := newShareOrderFixture(t, "a", "b", "c")
+	assertShareOrder(t, f, "a", "b", "c")
+	var count int
+	if err := f.app.db.QueryRow("SELECT count(*) FROM settings_meta WHERE key='shares_order'").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatal("loading legacy shares unexpectedly wrote ordering metadata")
+	}
+	ordered := f.request("POST", "/api/settings/shares/order", `{"ids":["c","a","b"]}`, 200)
+	assertFileViewDocument(t, ordered, string(f.request("GET", "/api/shares", "", 200)))
+	shares := assertShareOrder(t, f, "c", "a", "b")
+	f.stop()
+	f.start()
+	assertShareOrder(t, f, "c", "a", "b")
+	// Editing either metadata or a path must not change the saved position.
+	body, err := json.Marshal(map[string]any{"id": "a", "name": "Edited", "path": t.TempDir(), "readOnly": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.request("POST", "/api/settings/shares/save", string(body), 200)
+	edited := assertShareOrder(t, f, "c", "a", "b")
+	if edited[1].Name != "Edited" || !edited[1].ReadOnly {
+		t.Fatalf("edit was not reflected in listing: %+v", edited[1])
+	}
+	f.stop()
+	f.start()
+	assertShareOrder(t, f, "c", "a", "b")
+	body, err = json.Marshal(map[string]string{"name": "New", "path": t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.request("POST", "/api/settings/shares/save", string(body), 200)
+	var added []Share
+	if err = json.Unmarshal(f.request("GET", "/api/shares", "", 200), &added); err != nil {
+		t.Fatal(err)
+	}
+	if len(added) != 4 {
+		t.Fatalf("share was not appended: %+v", added)
+	}
+	newID := added[3].ID
+	assertShareOrder(t, f, "c", "a", "b", newID)
+	f.request("POST", "/api/settings/shares/remove", `{"id":"a"}`, 200)
+	assertShareOrder(t, f, "c", "b", newID)
+	f.stop()
+	f.start()
+	assertShareOrder(t, f, "c", "b", newID)
+	f.request("POST", "/api/settings/shares/remove", `{"id":"c"}`, 200)
+	// A deleted ID recreated by an older writer must not reclaim its old slot.
+	if _, err = f.app.db.Exec("INSERT INTO shared_settings(id,name,path,read_only) VALUES('c','Recreated',?,0)", shares[0].Path); err != nil {
+		t.Fatal(err)
+	}
+	f.stop()
+	f.start()
+	assertShareOrder(t, f, "b", newID, "c")
+	for _, id := range []string{"b", newID, "c"} {
+		body, err = json.Marshal(map[string]string{"id": id})
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.request("POST", "/api/settings/shares/remove", string(body), 200)
+	}
+	assertFileViewDocument(t, f.request("POST", "/api/settings/shares/order", `{"ids":[]}`, 200), `[]`)
+	f.stop()
+	f.start()
+	assertShareOrder(t, f)
+}
+
+func TestShareOrderRejectsInvalidRequestsWithoutMutation(t *testing.T) {
+	f := newShareOrderFixture(t, "a", "b", "c")
+	f.request("POST", "/api/settings/shares/order", `{"ids":["c","a","b"]}`, 200)
+	var before string
+	if err := f.app.db.QueryRow("SELECT value FROM settings_meta WHERE key='shares_order'").Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	for _, body := range []string{
+		`{}`, `null`, `{"ids":null}`, `{"ids":[]}`,
+		`{"ids":["c","a"]}`, `{"ids":["c","a","b","extra"]}`,
+		`{"ids":["c","a","a"]}`, `{"ids":["c","a","unknown"]}`,
+		`{"ids":["c","a",""]}`, `{"ids":["c","a",null]}`,
+		`{"ids":"c,a,b"}`, `{"ids":["c","a",1]}`,
+		`{"ids":["c","a","b"],"extra":true}`, `{"ids":["c","a","b"]} {}`,
+	} {
+		t.Run(body, func(t *testing.T) {
+			f.request("POST", "/api/settings/shares/order", body, 400)
+			assertShareOrder(t, f, "c", "a", "b")
+			var after string
+			if err := f.app.db.QueryRow("SELECT value FROM settings_meta WHERE key='shares_order'").Scan(&after); err != nil {
+				t.Fatal(err)
+			}
+			if after != before {
+				t.Fatalf("invalid order changed stored value: %s -> %s", before, after)
+			}
+		})
+	}
+	f.stop()
+	f.start()
+	assertShareOrder(t, f, "c", "a", "b")
+}
+
+func TestShareOrderUsesAuthenticationCSRFAndShareLock(t *testing.T) {
+	f := newShareOrderFixture(t, "a", "b")
+	body := `{"ids":["b","a"]}`
+	f.requestWithAuth("POST", "/api/settings/shares/order", body, &http.Client{}, f.csrf, f.srv.URL, 401)
+	f.requestWithAuth("POST", "/api/settings/shares/order", body, f.client, "", f.srv.URL, 403)
+	f.requestWithAuth("POST", "/api/settings/shares/order", body, f.client, "wrong-token", f.srv.URL, 403)
+	f.requestWithAuth("POST", "/api/settings/shares/order", body, f.client, f.csrf, "https://other.example", 403)
+	assertShareOrder(t, f, "a", "b")
+	func() {
+		f.app.sharesMu.RLock()
+		defer f.app.sharesMu.RUnlock()
+		f.request("POST", "/api/settings/shares/order", body, 409)
+	}()
+	assertShareOrder(t, f, "a", "b")
+	f.request("POST", "/api/settings/shares/order", body, 200)
+	assertShareOrder(t, f, "b", "a")
+}
+
+func TestShareOrderLoadIgnoresStaleAndDuplicateIDs(t *testing.T) {
+	f := newShareOrderFixture(t, "a", "b", "c")
+	if _, err := f.app.db.Exec("INSERT INTO settings_meta(key,value) VALUES('shares_order',?)", `["removed","c","c","a"]`); err != nil {
+		t.Fatal(err)
+	}
+	f.stop()
+	f.start()
+	assertShareOrder(t, f, "c", "a", "b")
+	// The next lifecycle mutation writes only the current exact ordering.
+	f.request("POST", "/api/settings/shares/remove", `{"id":"a"}`, 200)
+	var stored string
+	if err := f.app.db.QueryRow("SELECT value FROM settings_meta WHERE key='shares_order'").Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	assertFileViewDocument(t, []byte(stored), `["c","b"]`)
+	f.stop()
+	f.start()
+	assertShareOrder(t, f, "c", "b")
+}
+
+func TestShareOrderDatabaseFailureLeavesSharesUnchanged(t *testing.T) {
+	f := newShareOrderFixture(t, "a", "b")
+	f.request("POST", "/api/settings/shares/order", `{"ids":["b","a"]}`, 200)
+	if _, err := f.app.db.Exec(`CREATE TRIGGER reject_share_order BEFORE INSERT ON settings_meta WHEN NEW.key='shares_order' BEGIN SELECT RAISE(FAIL,'ordering write rejected'); END`); err != nil {
+		t.Fatal(err)
+	}
+	f.request("POST", "/api/settings/shares/order", `{"ids":["a","b"]}`, 400)
+	assertShareOrder(t, f, "b", "a")
+	body, err := json.Marshal(map[string]string{"name": "Rejected", "path": t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.request("POST", "/api/settings/shares/save", string(body), 400)
+	assertShareOrder(t, f, "b", "a")
+	f.request("POST", "/api/settings/shares/remove", `{"id":"b"}`, 400)
+	assertShareOrder(t, f, "b", "a")
+	f.stop()
+	f.start()
+	assertShareOrder(t, f, "b", "a")
+}

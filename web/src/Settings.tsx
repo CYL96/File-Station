@@ -13,7 +13,7 @@ function errorMessage(cause: unknown, fallback: string) {
   return cause instanceof ApiError && cause.status === 409 ? `${message} 请等待相关任务结束；如回收站仍有项目，请先恢复或清空后重试。` : message;
 }
 
-export function Settings({ generalSettings, generalLoading, generalError, onSaveGeneral, onClose, onChanged }: { generalSettings: GeneralSettings; generalLoading: boolean; generalError: string; onSaveGeneral: (settings: GeneralSettings, signal: AbortSignal) => Promise<GeneralSettings | null>; onClose: () => void; onChanged: (change: ShareSettingsChange) => Promise<void> }) {
+export function Settings({ generalSettings, generalLoading, generalError, onSaveGeneral, onClose, onAbout, onChanged }: { generalSettings: GeneralSettings; generalLoading: boolean; generalError: string; onSaveGeneral: (settings: GeneralSettings, signal: AbortSignal) => Promise<GeneralSettings | null>; onClose: () => void; onAbout: () => void; onChanged: (change: ShareSettingsChange) => Promise<void> }) {
   const { t, locale } = useI18n();
   const [category, setCategory] = useState<'general' | 'shares' | null>(null);
   const [generalDraft, setGeneralDraft] = useState<GeneralSettings | null>(null);
@@ -47,8 +47,9 @@ export function Settings({ generalSettings, generalLoading, generalError, onSave
     if (writing.current) return;
     writing.current = true; setBusy(true); setError(''); setSuccess('');
     try {
-      await request<{ ok: boolean }>(endpoint, body);
-      setDraft(null); setRemoving(null); setPickerOpen(false); setSuccess(message);
+      await request<unknown>(endpoint, body);
+      if (endpoint !== 'settings/shares/order') { setDraft(null); setRemoving(null); setPickerOpen(false); }
+      setSuccess(message);
       const results = await Promise.allSettled([
         request<ShareSettingsData>('settings/shares').then(setData),
         onChanged(change),
@@ -58,6 +59,14 @@ export function Settings({ generalSettings, generalLoading, generalError, onSave
     } catch (cause) {
       setError(errorMessage(cause, '保存共享设置失败'));
     } finally { writing.current = false; setBusy(false); }
+  }
+  function moveShare(index: number, direction: -1 | 1) {
+    if (!data || writing.current) return;
+    const target = index + direction;
+    if (target < 0 || target >= data.shares.length) return;
+    const ids = data.shares.map(share => share.id);
+    [ids[index], ids[target]] = [ids[target], ids[index]];
+    void mutate('settings/shares/order', { ids }, {}, '共享顺序已保存。');
   }
   async function saveGeneral() {
     if (writing.current || generalLoading) return;
@@ -79,7 +88,7 @@ export function Settings({ generalSettings, generalLoading, generalError, onSave
   const { dateFormat, permissionFormat } = generalDraft ?? generalSettings;
   const path = draft ? draft.path.replace(/\/+$/, '') || '/' : '';
   const invalid = !draft?.name.trim() || !draft.path.startsWith('/');
-  return <><Modal title={t('设置')} wide onClose={() => { if (!writing.current) onClose(); }}>
+  return <><Modal title={t('设置')} wide headerContent={<button type="button" className="button settings-header-about" disabled={busy} onClick={() => { if (!writing.current) onAbout(); }}><Icon name="help" size={16} />{t('关于 File Station')}</button>} onClose={() => { if (!writing.current) onClose(); }}>
     <div className="modal-body settings-body">
       {category === null ? <div className="settings-home">
         <p className="settings-home-description">{t('选择设置分类，管理文件工作空间。')}</p>
@@ -146,7 +155,19 @@ export function Settings({ generalSettings, generalLoading, generalError, onSave
       {loading ? <div className="loading-state" role="status"><span className="spinner" />{t('正在读取共享设置…')}</div> : data && <>
         <div className="share-settings-layout">
           <section className="managed-shares" aria-label={t('已有共享目录')}><div className="share-section-heading"><h3>{t('共享目录')} <span>{data.shares.length.toLocaleString(locale)}</span></h3><button className="button" disabled={busy} onClick={() => edit()}><Icon name="plus" size={16} />{t('添加共享')}</button></div>
-            {data.shares.length === 0 ? <p className="share-settings-empty">{t('首次使用不预设任何共享目录。点击「添加共享」，手动选择服务账号可访问的文件夹；Docker 挂载目录（如 /mnt 下的目录）也需要在此添加。')}</p> : <ul className="managed-share-list">{data.shares.map(item => <li key={item.id} className={draft?.id === item.id || removing?.id === item.id ? 'active' : ''}><div className="managed-share-details"><h4><Icon name="folder" size={17} /><span>{item.name}</span>{item.readOnly && <span className="readonly-badge">{t('只读')}</span>}</h4><code>{item.path}</code>{!item.available && <p className="form-error"><Icon name="warning" size={14} />{t('不可用：{detail}', { detail: t(item.error || '目录当前无法访问') })}</p>}</div><div className="managed-share-actions"><button className="button" disabled={busy} onClick={() => edit(item)} aria-label={t('编辑共享 {name}', { name: item.name })}><Icon name="edit" size={15} />{t('编辑')}</button><button className="button danger-text" disabled={busy} onClick={() => { setRemoving(item); setDraft(null); setPickerOpen(false); setError(''); setSuccess(''); }} aria-label={t('移除共享 {name}', { name: item.name })}><Icon name="trash" size={15} />{t('移除')}</button></div></li>)}</ul>}
+            {data.shares.length === 0 ? <p className="share-settings-empty">{t('首次使用不预设任何共享目录。点击「添加共享」，手动选择服务账号可访问的文件夹；Docker 挂载目录（如 /mnt 下的目录）也需要在此添加。')}</p> : <ul className="managed-share-list">{data.shares.map((item, index) => <li key={item.id} className={draft?.id === item.id || removing?.id === item.id ? 'active' : ''}>
+              <div className="managed-share-details">
+                <h4><span title={item.name}>{item.name}</span>{item.readOnly && <span className="readonly-badge">{t('只读')}</span>}</h4>
+                <code title={item.path}>{item.path}</code>
+                {!item.available && <p className="form-error"><Icon name="warning" size={14} /><span>{t('不可用：{detail}', { detail: t(item.error || '目录当前无法访问') })}</span></p>}
+              </div>
+              <div className="managed-share-actions">
+                <button type="button" className="icon-button" disabled={busy || index === 0} onClick={() => moveShare(index, -1)} aria-label={t('上移共享 {name}', { name: item.name })} title={t('上移共享 {name}', { name: item.name })}><Icon name="arrow" size={16} className="share-move-up" /></button>
+                <button type="button" className="icon-button" disabled={busy || index === data.shares.length - 1} onClick={() => moveShare(index, 1)} aria-label={t('下移共享 {name}', { name: item.name })} title={t('下移共享 {name}', { name: item.name })}><Icon name="arrow" size={16} className="share-move-down" /></button>
+                <button type="button" className="icon-button" disabled={busy} onClick={() => edit(item)} aria-label={t('编辑共享 {name}', { name: item.name })} title={t('编辑共享 {name}', { name: item.name })}><Icon name="edit" size={16} /></button>
+                <button type="button" className="icon-button danger-text" disabled={busy} onClick={() => { setRemoving(item); setDraft(null); setPickerOpen(false); setError(''); setSuccess(''); }} aria-label={t('移除共享 {name}', { name: item.name })} title={t('移除共享 {name}', { name: item.name })}><Icon name="trash" size={16} /></button>
+              </div>
+            </li>)}</ul>}
           </section>
           <section className="share-settings-editor" aria-label={t(removing ? '确认移除共享' : draft ? '编辑共享' : '共享编辑器')}>
             {removing ? <div className="share-remove-confirm"><h3>{t('移除「{name}」？', { name: removing.name })}</h3><p>{t('只移除共享入口，磁盘上的文件和文件夹会保留，不会被删除。')}</p><code>{removing.path}</code><p className="field-help">{t('有进行中的操作或回收站项目时，服务器会拒绝移除；请先处理后重试。')}</p><div className="share-editor-actions"><button className="button" disabled={busy} onClick={() => setRemoving(null)}>{t('取消')}</button><button className="button danger" disabled={busy} onClick={() => { void mutate('settings/shares/remove', { id: removing.id }, { id: removing.id, removed: true }, '共享已移除，磁盘文件保持不变。'); }}>{t(busy ? '正在移除…' : '确认移除共享')}</button></div></div> : draft ? <form onSubmit={event => {

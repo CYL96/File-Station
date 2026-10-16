@@ -56,6 +56,8 @@ export const appMessages: Record<string, string> = {
   '回收站': 'Trash',
   '键盘快捷键': 'Keyboard shortcuts',
   '收起导航': 'Collapse navigation',
+  '调整侧栏宽度': 'Resize sidebar',
+  '左右拖动或使用左右方向键调整宽度；双击或按 Home 恢复默认': 'Drag horizontally or use the Left and Right arrow keys to resize; double-click or press Home to reset',
   '选择上传文件': 'Choose files to upload',
   '回收站文件': 'Trashed files',
   '文件列表': 'File list',
@@ -190,5 +192,4 @@ export const appMessages: Record<string, string> = {
   '收起{name}目录': 'Collapse folder {name}',
   '展开{name}目录': 'Expand folder {name}',
   '读取中…': 'Loading…',
-  '无子文件夹': 'No subfolders'
 };

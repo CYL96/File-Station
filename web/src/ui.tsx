@@ -52,7 +52,7 @@ function ThumbnailImage({ src, size }: { src: string; size: number }) {
 }
 export function ImageThumbnail({ share, entry, onOpen, size = 24 }: { share: string; entry: Entry; onOpen: () => void; size?: number }) {
   const { t } = useI18n();
-  const src = apiURL('preview', { share, path: entry.path, modified: entry.modified, size: String(entry.size) });
+  const src = apiURL('thumbnail', { share, path: entry.path, modified: entry.modified, size: String(entry.size) });
   return <button type="button" className="file-glyph image-glyph file-thumbnail" aria-label={t('预览 {name}', { name: entry.name })} onClick={event => {
     if (event.shiftKey || event.ctrlKey || event.metaKey || event.altKey) return;
     event.stopPropagation();

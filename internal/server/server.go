@@ -62,6 +62,7 @@ type Server struct {
 	tasksMu            sync.Mutex
 	tasks              map[string]*Task
 	workers            sync.WaitGroup
+	thumbnails         thumbnailCache
 	loginMu            sync.Mutex
 	failures           int
 	blockedUntil       time.Time
@@ -297,13 +298,9 @@ func (s *Server) routes(static string) {
 		return err
 	})
 	s.api("GET /api/shares", func(w http.ResponseWriter, r *http.Request) error {
-		result := []map[string]any{}
 		s.sharesMu.RLock()
 		defer s.sharesMu.RUnlock()
-		for _, sh := range s.shares {
-			result = append(result, map[string]any{"id": sh.ID, "name": sh.Name, "readOnly": sh.ReadOnly})
-		}
-		jsonResponse(w, result)
+		jsonResponse(w, s.shareList())
 		return nil
 	})
 	s.shareAPI("GET /api/files", s.list)
@@ -315,6 +312,7 @@ func (s *Server) routes(static string) {
 	s.shareAPI("POST /api/upload", s.upload)
 	s.shareAPI("GET /api/download", s.download)
 	s.shareAPI("GET /api/preview", s.preview)
+	s.shareAPI("GET /api/thumbnail", s.thumbnail)
 	s.shareAPI("POST /api/operation", s.operation)
 	s.api("GET /api/tasks", s.getTasks)
 	s.api("POST /api/tasks/clear", s.clearTasks)
@@ -334,6 +332,7 @@ func (s *Server) routes(static string) {
 	s.api("GET /api/settings/directories", s.settingsDirectories)
 	s.api("POST /api/settings/shares/save", s.saveShare)
 	s.api("POST /api/settings/shares/remove", s.removeShare)
+	s.api("POST /api/settings/shares/order", s.reorderShares)
 	s.mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) { errorResponse(w, fail(404, "接口不存在")) })
 	files := http.FileServer(http.Dir(static))
 	s.mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
