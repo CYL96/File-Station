@@ -1,18 +1,25 @@
 package server
 
 import (
+	"encoding/json"
 	"net/http"
-	"strings"
 	"testing"
 )
 
-const defaultGeneralDocument = `{"dateFormat":"locale"}`
-const customGeneralDocument = `{"dateFormat":"dd/MM/yyyy"}`
+const defaultGeneralDocument = `{"dateFormat":"locale","permissionFormat":"octal"}`
+const customGeneralDocument = `{"dateFormat":"dd/MM/yyyy","permissionFormat":"symbolic"}`
 
 func assertGeneralSettingsDocument(t *testing.T, raw []byte, want string) {
 	t.Helper()
-	if strings.TrimSpace(string(raw)) != want {
-		t.Fatalf("general settings = %s, want %s", raw, want)
+	var gotSettings, wantSettings generalSettings
+	if err := json.Unmarshal(raw, &gotSettings); err != nil {
+		t.Fatalf("decode general settings %s: %v", raw, err)
+	}
+	if err := json.Unmarshal([]byte(want), &wantSettings); err != nil {
+		t.Fatalf("decode expected general settings %s: %v", want, err)
+	}
+	if gotSettings != wantSettings {
+		t.Fatalf("general settings = %+v, want %+v", gotSettings, wantSettings)
 	}
 }
 
@@ -33,23 +40,57 @@ func TestGeneralSettingsDefaultsDoNotPersist(t *testing.T) {
 
 func TestGeneralSettingsFormatsRoundTripAndPersist(t *testing.T) {
 	f := newFileSettingsFixture(t)
-	for _, format := range []string{"yyyy-MM-dd", "yyyy/MM/dd", "dd/MM/yyyy", "MM/dd/yyyy", "locale"} {
-		t.Run(format, func(t *testing.T) {
-			document := `{"dateFormat":"` + format + `"}`
-			assertGeneralSettingsDocument(t, f.request("POST", "/api/settings/general/save", document, http.StatusOK), document)
-			assertGeneralSettingsDocument(t, f.request("GET", "/api/settings/general", "", http.StatusOK), document)
-			var stored string
-			if err := f.app.db.QueryRow("SELECT value FROM settings_meta WHERE key='general'").Scan(&stored); err != nil {
-				t.Fatal(err)
-			}
-			assertGeneralSettingsDocument(t, []byte(stored), document)
-			f.stop()
-			f.start()
-			assertGeneralSettingsDocument(t, f.request("GET", "/api/settings/general", "", http.StatusOK), document)
-		})
+	for _, dateFormat := range []string{"yyyy-MM-dd", "yyyy/MM/dd", "dd/MM/yyyy", "MM/dd/yyyy", "locale"} {
+		for _, permissionFormat := range []string{"octal", "symbolic"} {
+			t.Run(dateFormat+"/"+permissionFormat, func(t *testing.T) {
+				document := `{"dateFormat":"` + dateFormat + `","permissionFormat":"` + permissionFormat + `"}`
+				assertGeneralSettingsDocument(t, f.request("POST", "/api/settings/general/save", document, http.StatusOK), document)
+				assertGeneralSettingsDocument(t, f.request("GET", "/api/settings/general", "", http.StatusOK), document)
+				var stored string
+				if err := f.app.db.QueryRow("SELECT value FROM settings_meta WHERE key='general'").Scan(&stored); err != nil {
+					t.Fatal(err)
+				}
+				assertGeneralSettingsDocument(t, []byte(stored), document)
+				f.stop()
+				f.start()
+				assertGeneralSettingsDocument(t, f.request("GET", "/api/settings/general", "", http.StatusOK), document)
+			})
+		}
 	}
 	// General settings must not change the separately persisted file-view settings.
 	assertFileViewDocument(t, f.request("GET", "/api/settings/files", "", http.StatusOK), defaultFileViewDocument)
+}
+
+func TestGeneralSettingsLegacyStorageDefaultsPermissionFormat(t *testing.T) {
+	f := newFileSettingsFixture(t)
+	const legacyDocument = `{"dateFormat":"yyyy/MM/dd"}`
+	const want = `{"dateFormat":"yyyy/MM/dd","permissionFormat":"octal"}`
+	if _, err := f.app.db.Exec("INSERT INTO settings_meta(key,value) VALUES('general',?)", legacyDocument); err != nil {
+		t.Fatal(err)
+	}
+	assertGeneralSettingsDocument(t, f.request("GET", "/api/settings/general", "", http.StatusOK), want)
+	f.stop()
+	f.start()
+	assertGeneralSettingsDocument(t, f.request("GET", "/api/settings/general", "", http.StatusOK), want)
+	var stored string
+	if err := f.app.db.QueryRow("SELECT value FROM settings_meta WHERE key='general'").Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored != legacyDocument {
+		t.Fatal("reading legacy settings unexpectedly rewrote the document")
+	}
+}
+
+func TestGeneralSettingsLegacyRequestDefaultsPermissionFormat(t *testing.T) {
+	f := newFileSettingsFixture(t)
+	f.request("POST", "/api/settings/general/save", customGeneralDocument, http.StatusOK)
+	const legacyDocument = `{"dateFormat":"MM/dd/yyyy"}`
+	const want = `{"dateFormat":"MM/dd/yyyy","permissionFormat":"octal"}`
+	assertGeneralSettingsDocument(t, f.request("POST", "/api/settings/general/save", legacyDocument, http.StatusOK), want)
+	assertGeneralSettingsDocument(t, f.request("GET", "/api/settings/general", "", http.StatusOK), want)
+	f.stop()
+	f.start()
+	assertGeneralSettingsDocument(t, f.request("GET", "/api/settings/general", "", http.StatusOK), want)
 }
 
 func TestGeneralSettingsInvalidWritesPreserveDocument(t *testing.T) {
@@ -71,6 +112,17 @@ func TestGeneralSettingsInvalidWritesPreserveDocument(t *testing.T) {
 		{"unknown format", `{"dateFormat":"iso"}`},
 		{"wrong case", `{"dateFormat":"YYYY-MM-DD"}`},
 		{"padded format", `{"dateFormat":" locale "}`},
+		{"missing date with permission", `{"permissionFormat":"symbolic"}`},
+		{"null date with permission", `{"dateFormat":null,"permissionFormat":"symbolic"}`},
+		{"null permission", `{"dateFormat":"locale","permissionFormat":null}`},
+		{"wrong permission type", `{"dateFormat":"locale","permissionFormat":24}`},
+		{"boolean permission", `{"dateFormat":"locale","permissionFormat":false}`},
+		{"object permission", `{"dateFormat":"locale","permissionFormat":{}}`},
+		{"array permission", `{"dateFormat":"locale","permissionFormat":[]}`},
+		{"empty permission", `{"dateFormat":"locale","permissionFormat":""}`},
+		{"unknown permission", `{"dateFormat":"locale","permissionFormat":"rwx"}`},
+		{"wrong permission case", `{"dateFormat":"locale","permissionFormat":"OCTAL"}`},
+		{"padded permission", `{"dateFormat":"locale","permissionFormat":" symbolic "}`},
 		{"unknown field", `{"dateFormat":"locale","extra":true}`},
 		{"trailing document", defaultGeneralDocument + `{}`},
 		{"trailing null", defaultGeneralDocument + `null`},
@@ -129,6 +181,10 @@ func TestGeneralSettingsCorruptStorageIsNotReplaced(t *testing.T) {
 	for _, document := range []string{
 		`not JSON`, `null`, `[]`, `{}`, `{"dateFormat":null}`, `{"dateFormat":false}`,
 		`{"dateFormat":""}`, `{"dateFormat":"unknown"}`,
+		`{"permissionFormat":"symbolic"}`, `{"dateFormat":null,"permissionFormat":"symbolic"}`,
+		`{"dateFormat":"locale","permissionFormat":null}`, `{"dateFormat":"locale","permissionFormat":false}`,
+		`{"dateFormat":"locale","permissionFormat":""}`, `{"dateFormat":"locale","permissionFormat":"unknown"}`,
+		`{"dateFormat":"locale","permissionFormat":"OCTAL"}`, `{"dateFormat":"locale","permissionFormat":" symbolic "}`,
 		`{"dateFormat":"locale","extra":true}`, defaultGeneralDocument + `{}`,
 		defaultGeneralDocument + `null`, defaultGeneralDocument + `invalid`,
 	} {

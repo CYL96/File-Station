@@ -1,7 +1,5 @@
-import type { DateFormat, GeneralSettings } from './api';
+import type { DateFormat } from './api';
 import { getLocale } from './i18n';
-
-export const defaultGeneralSettings: GeneralSettings = { dateFormat: 'locale' };
 
 export function formatDate(value: string, dateFormat: DateFormat) {
   const date = new Date(value);

@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { ApiError, request } from './api';
-import type { DateFormat, GeneralSettings, ManagedShare, SettingsDirectories, ShareSettingsChange, ShareSettingsData } from './api';
+import type { DateFormat, GeneralSettings, ManagedShare, PermissionFormat, SettingsDirectories, ShareSettingsChange, ShareSettingsData } from './api';
 import { Icon, Modal } from './ui';
 import { formatDate } from './dateFormat';
+import { formatPermissions } from './permissionFormat';
 import { useI18n } from './i18n';
 
 type ShareDraft = { id?: string; name: string; path: string; readOnly: boolean; originalPath?: string };
@@ -66,7 +67,7 @@ export function Settings({ generalSettings, generalLoading, generalError, onSave
     try {
       const saved = await onSaveGeneral(generalDraft ?? generalSettings, controller.signal);
       if (!controller.signal.aborted && saved) {
-        setGeneralDraft(saved); setGeneralSuccess('通用设置已保存，日期显示已更新。');
+        setGeneralDraft(saved); setGeneralSuccess('通用设置已保存，日期和权限显示已更新。');
       }
     } catch (cause) {
       if (!controller.signal.aborted) setGeneralSaveError(cause instanceof Error ? cause.message : '保存通用设置失败');
@@ -75,7 +76,7 @@ export function Settings({ generalSettings, generalLoading, generalError, onSave
       if (!controller.signal.aborted) setBusy(false);
     }
   }
-  const dateFormat = (generalDraft ?? generalSettings).dateFormat;
+  const { dateFormat, permissionFormat } = generalDraft ?? generalSettings;
   const path = draft ? draft.path.replace(/\/+$/, '') || '/' : '';
   const invalid = !draft?.name.trim() || !draft.path.startsWith('/');
   return <><Modal title={t('设置')} wide onClose={() => { if (!writing.current) onClose(); }}>
@@ -85,7 +86,7 @@ export function Settings({ generalSettings, generalLoading, generalError, onSave
         <div className="settings-categories">
           <button type="button" className="settings-category-card" onClick={() => setCategory('general')} autoFocus>
             <span className="settings-category-icon"><Icon name="settings" size={24} /></span>
-            <span className="settings-category-copy"><strong>{t('通用设置')}</strong><span>{t('设置全站日期显示格式')}</span></span>
+            <span className="settings-category-copy"><strong>{t('通用设置')}</strong><span>{t('设置全站日期与权限显示格式')}</span></span>
             <Icon name="chevron" size={17} />
           </button>
           <button type="button" className="settings-category-card" onClick={() => setCategory('shares')}>
@@ -106,7 +107,7 @@ export function Settings({ generalSettings, generalLoading, generalError, onSave
             {generalSuccess && <p className="share-settings-success" role="status"><Icon name="check" size={17} />{t(generalSuccess)}</p>}
             <fieldset disabled={busy}>
               <label className="field-label" htmlFor="general-date-format">{t('日期显示格式')}</label>
-              <select id="general-date-format" className="text-input" value={dateFormat} onChange={event => { setGeneralDraft({ dateFormat: event.target.value as DateFormat }); setGeneralSaveError(''); setGeneralSuccess(''); }} aria-describedby="general-date-help general-date-preview">
+              <select id="general-date-format" className="text-input" value={dateFormat} onChange={event => { const value = event.target.value as DateFormat; setGeneralDraft(current => ({ ...(current ?? generalSettings), dateFormat: value })); setGeneralSaveError(''); setGeneralSuccess(''); }} aria-describedby="general-date-help general-date-preview">
                 <option value="locale">{t('默认格式（跟随界面语言）')}</option>
                 <option value="yyyy-MM-dd">{t('年-月-日（yyyy-MM-dd HH:mm:ss）')}</option>
                 <option value="yyyy/MM/dd">{t('年/月/日（yyyy/MM/dd HH:mm:ss）')}</option>
@@ -114,7 +115,16 @@ export function Settings({ generalSettings, generalLoading, generalError, onSave
                 <option value="MM/dd/yyyy">{t('月/日/年（MM/dd/yyyy HH:mm:ss）')}</option>
               </select>
               <p id="general-date-help" className="field-help">{t('使用本地时区和 24 小时制，保留小时、分钟与秒。保存后应用到文件修改、创建、回收站删除时间和预览中的日期。')}</p>
-              <p id="general-date-preview" className="general-date-preview" aria-live="polite">{t('显示示例：')}<time>{formatDate(new Date(2026, 10, 23, 14, 5, 9).toISOString(), dateFormat)}</time></p>
+              <p id="general-date-preview" className="general-format-preview" aria-live="polite">{t('显示示例：')}<time>{formatDate(new Date(2026, 10, 23, 14, 5, 9).toISOString(), dateFormat)}</time></p>
+            </fieldset>
+            <fieldset disabled={busy}>
+              <label className="field-label" htmlFor="general-permission-format">{t('权限显示格式')}</label>
+              <select id="general-permission-format" className="text-input" value={permissionFormat} onChange={event => { const value = event.target.value as PermissionFormat; setGeneralDraft(current => ({ ...(current ?? generalSettings), permissionFormat: value })); setGeneralSaveError(''); setGeneralSuccess(''); }} aria-describedby="general-permission-help general-permission-preview">
+                <option value="octal">{t('八进制（0755）')}</option>
+                <option value="symbolic">{t('符号格式（rwxr-xr-x）')}</option>
+              </select>
+              <p id="general-permission-help" className="field-help">{t('保存后应用到文件列表和回收站的权限列。仅改变显示格式，不修改实际权限或排序。')}</p>
+              <p id="general-permission-preview" className="general-format-preview" aria-live="polite">{t('显示示例：')}<code>{formatPermissions('0755', permissionFormat)}</code></p>
             </fieldset>
             <div className="share-editor-actions"><span className="field-help">{t('选择后需保存才会生效。')}</span><button type="submit" className="button primary" disabled={busy}>{t(busy ? '正在保存…' : '保存通用设置')}</button></div>
           </>}
