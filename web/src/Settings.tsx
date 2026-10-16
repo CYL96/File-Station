@@ -13,7 +13,7 @@ function errorMessage(cause: unknown, fallback: string) {
   return cause instanceof ApiError && cause.status === 409 ? `${message} 请等待相关任务结束；如回收站仍有项目，请先恢复或清空后重试。` : message;
 }
 
-export function Settings({ generalSettings, generalLoading, generalError, onSaveGeneral, onClose, onChanged }: { generalSettings: GeneralSettings; generalLoading: boolean; generalError: string; onSaveGeneral: (settings: GeneralSettings, signal: AbortSignal) => Promise<GeneralSettings | null>; onClose: () => void; onChanged: (change: ShareSettingsChange) => Promise<void> }) {
+export function Settings({ generalSettings, generalLoading, generalError, onSaveGeneral, onClose, onAbout, onChanged }: { generalSettings: GeneralSettings; generalLoading: boolean; generalError: string; onSaveGeneral: (settings: GeneralSettings, signal: AbortSignal) => Promise<GeneralSettings | null>; onClose: () => void; onAbout: () => void; onChanged: (change: ShareSettingsChange) => Promise<void> }) {
   const { t, locale } = useI18n();
   const [category, setCategory] = useState<'general' | 'shares' | null>(null);
   const [generalDraft, setGeneralDraft] = useState<GeneralSettings | null>(null);
@@ -88,7 +88,7 @@ export function Settings({ generalSettings, generalLoading, generalError, onSave
   const { dateFormat, permissionFormat } = generalDraft ?? generalSettings;
   const path = draft ? draft.path.replace(/\/+$/, '') || '/' : '';
   const invalid = !draft?.name.trim() || !draft.path.startsWith('/');
-  return <><Modal title={t('设置')} wide onClose={() => { if (!writing.current) onClose(); }}>
+  return <><Modal title={t('设置')} wide headerContent={<button type="button" className="button settings-header-about" disabled={busy} onClick={() => { if (!writing.current) onAbout(); }}><Icon name="help" size={16} />{t('关于 File Station')}</button>} onClose={() => { if (!writing.current) onClose(); }}>
     <div className="modal-body settings-body">
       {category === null ? <div className="settings-home">
         <p className="settings-home-description">{t('选择设置分类，管理文件工作空间。')}</p>

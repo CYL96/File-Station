@@ -64,6 +64,8 @@
 .settings-body{padding:22px;min-width:0}
 .modal:has(.settings-body){scrollbar-width:none}
 .modal:has(.settings-body)::-webkit-scrollbar{display:none}
+.modal-heading:has(>.settings-header-about){display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:8px}
+@media(max-width:420px){.modal-heading:has(>.settings-header-about)>h2{grid-column:1/-1}.modal-heading>.settings-header-about{grid-column:2}}
 .settings-home-description{margin:0 0 18px;color:var(--muted);font-size:12px;line-height:1.8}
 .settings-categories{display:grid;grid-template-columns:minmax(0,1fr);gap:12px}
 .settings-category-card{display:flex;align-items:center;gap:14px;width:100%;min-width:0;padding:20px;border:1px solid var(--border);border-radius:9px;background:#fbfdff;text-align:left}
@@ -184,7 +186,6 @@
 .modal:has(.advanced-settings-body)>form{display:flex;flex-direction:column;min-height:0}
 .advanced-settings-body{overflow:auto;min-height:0;overscroll-behavior:contain}
 .modal:has(.advanced-settings-body) .modal-actions{flex-shrink:0}
-.settings-about-entry{margin-top:22px;padding-top:18px;border-top:1px solid var(--border)}
 .modal:has(>.about-body){display:flex;flex-direction:column;overflow:hidden}
 .modal:has(>.about-body)>.modal-heading,.modal:has(>.about-body)>.modal-actions{flex-shrink:0}
 .about-body{min-height:0;overflow:auto;overscroll-behavior:contain;font-size:12px;line-height:1.8;overflow-wrap:anywhere}
@@ -368,3 +369,15 @@
   .task-statistics dt{white-space:normal;text-align:center}
   .modal-actions{flex-wrap:wrap}
 }
+
+/* Desktop sidebar sizing leaves responsive defaults and the mobile drawer intact. */
+.sidebar .directory-tree{min-width:0;scrollbar-width:thin;scrollbar-color:#cfd9e5 transparent}
+.sidebar-resize-handle{display:none}
+@media(min-width:681px){
+  .sidebar{position:relative;width:var(--sidebar-user-width,var(--sidebar))}
+  .sidebar-resize-handle{display:block;position:absolute;inset:0 0 0 auto;width:8px;z-index:2;cursor:col-resize;touch-action:none;user-select:none;border-radius:0}
+  .sidebar-resize-handle::after{content:'';position:absolute;inset:0 0 0 auto;width:3px;background:var(--blue);opacity:0;transition:opacity .15s}
+  .sidebar-resize-handle:hover::after,.sidebar-resize-handle:focus-visible::after,.sidebar-resize-active .sidebar-resize-handle::after{opacity:.7}
+  .sidebar-resize-handle:focus-visible{outline:2px solid #80b4ff;outline-offset:-2px}
+}
+body.sidebar-resizing,body.sidebar-resizing *{cursor:col-resize!important;user-select:none!important;-webkit-user-select:none!important}

@@ -300,17 +300,15 @@ Optional initial JSON import: `"shares": [{"id":"documents","name":"文档","pat
 2. In **Settings → Share settings**, add existing, accessible, non-overlapping directories. Docker requires container-side mount paths.
 3. Enable read-only access as needed. Shares cannot cover state or password paths. Browsing from `/` in the directory picker does not mean `/` can be shared; choose specific data subdirectories rather than the entire home directory.
 
-Use the shared-folder list’s move-up and move-down buttons to change the display order. The order is saved automatically, also applies to the left-hand share navigation, and survives page reloads and service restarts.
-
 Saving takes effect immediately. Removing a share does not delete files. Share changes return 409 while file requests are being processed; affected shares cannot be modified or removed while they have active tasks. A nonempty recycle bin prevents changing the path or removing a share. Missing directories, unavailable mounts, or insufficient permissions mark the share unavailable without automatically deleting its configuration.
 
 ### Common operations and interface settings
 
 - Browse, search, sort, and select multiple items in list or grid view, then upload, download, create, rename, copy, move, or use the recycle bin. For conflicts, skip, replace files, or keep both; same-name directories are not recursively overwritten.
-- The task center shows progress and supports cancellation. Failed copy, move, and recycle-bin tasks can retry unfinished items while retaining old records; older tasks without retry parameters must be started again. Upload retries work only on the current page: select files again after refresh or sign-out. Unfinished tasks are marked interrupted on restart and are not automatically replayed.
-- Switch Chinese/English at the top; the choice is stored in the current browser. **Settings → General settings** controls date format and octal/symbolic permission display; enable permission columns in **Advanced settings → Columns**. These settings do not change file contents or actual permissions.
+- The task center shows progress and supports cancellation. Failed copy, move, and recycle-bin tasks can retry unfinished items while retaining old records. Upload retries work only on the current page: select files again after refresh or sign-out. Unfinished tasks are marked interrupted on restart and are not automatically replayed.
+- Configure the interface language, date format, and permission display format; display settings do not change file contents or actual permissions.
 - Images can be previewed; MP4/WebM use native browser playback without server-side transcoding. H.264 + AAC is recommended for MP4; actual support depends on the browser and operating system. Download unsupported files instead.
-- Text and Markdown can be edited within the limits under [File operations and editing](#file-operations-and-editing). Switching languages during Markdown visual editing retains the document and unsaved state, but resets undo history, the cursor, and uncommitted insertion dialogs. Finish dialog operations before switching.
+- Text and Markdown can be edited within the limits under [File operations and editing](#file-operations-and-editing).
 
 ## Security and limitations
 
@@ -326,14 +324,14 @@ Saving takes effect immediately. Removing a share does not delete files. Share c
 - New files use `0666 & ~umask`, and new directories use `0777 & ~umask`; default `0022` yields `0644/0755`, while NixOS `0077` yields `0600/0700`, still subject to system ACLs and other rules. Text saves, same-filesystem moves, and recycle-bin restores preserve original permissions. Copying does not preserve ownership, ACLs, extended attributes, hard-link relationships, or original timestamps.
 - Uploads and copies first write hidden staging files. Cancellation does not roll back completed items, and interruptions may leave staging files; clean them up only after confirming no tasks remain. Same-filesystem moves are atomic renames; cross-filesystem moves copy then delete and **are not an overall transaction**. Failure can leave both copies.
 - Text editing is limited to existing regular UTF-8 files of at most 1 MiB without NUL bytes. Saving is unavailable in read-only shares or the recycle bin, without write permission, or for files with multiple hard links. Saves must preserve permissions, ownership/group, ACLs, and extended attributes or they are rejected; atomic replacement changes the inode and timestamps. External changes report a conflict and retain the draft, but **this is not filesystem-level CAS**. Uniform CRLF is preserved; other line endings become LF.
-- Markdown previews do not execute raw HTML or automatically load external images. Visual editing reserializes Markdown; use source editing for exact preservation.
+- Markdown previews do not execute raw HTML or automatically load external images. Visual editing reserializes Markdown; use source editing for exact preservation. Switching languages during visual editing retains the document and unsaved state, but resets undo history, the cursor, and uncommitted insertion dialogs. Finish dialog operations before switching.
 
 ### Passwords and networking
 
-- Set password files and configuration containing passwords to `0600`, keep them outside shares, and never commit them or put them in image layers or the Nix store. Plaintext environment variables and Compose configuration can be read through `docker inspect` or by authorized host administrators. Use read-only JSON / password files to reduce environment-variable exposure.
+- Set password files and configuration containing passwords to `0600`, keep them outside shares, and never commit them or put them in image layers or the Nix store. Nix users must also keep configuration and passwords outside the source tree so `path:` builds do not copy them into the store, which is normally readable by all local users. Plaintext environment variables and Compose configuration can be read through `docker inspect` or by authorized host administrators. Use read-only JSON / password files to reduce environment-variable exposure.
 - Sessions last 12 hours; cookies use HttpOnly and SameSite=Strict, with CSRF protection. Enable `secureCookies` behind an HTTPS proxy (the same NixOS option; Docker requires JSON mode). Enabling it over plain HTTP prevents browsers from sending the session cookie.
 - Reverse proxies must preserve Host and keep the frontend and API on the same origin. Disable SSE buffering for `/api/events`, extend connection timeouts, and set upload size limits as needed. Expose only necessary ports to trusted networks and prefer HTTPS; NixOS does not open the firewall automatically.
-- **Advanced settings → About File Station → Check for updates** contacts GitHub from the server, checks only stable Releases, and links to the release page. It **does not download or install updates automatically**.
+- The built-in update check contacts GitHub from the server, checks only stable Releases, and links to the release page. It **does not download or install updates automatically**.
 
 ## Upgrades and legacy migration
 
@@ -347,20 +345,10 @@ Read the target version's release notes, prepare the new version, then stop the 
 | Docker / Compose (local-source build) | Update the local repository to the target version, preserving `.env`, `./state`, mounts, and runtime UID/GID. Stop the service and complete the consistent backup described above, then run `docker compose up -d --build` |
 | Prebuilt binary | Download the target version and checksums, verify, and extract into a new directory. Stop the old process, update the command or service to use the new executable and matching `web/dist`, and start with the original configuration |
 | Source build | Update source and rebuild both frontend and backend. Stop the old process, deploy matching outputs, and start with the original configuration |
-| Nix package | Update source or the locked flake version, run `nix build` again, switch the startup path to the new package, and restart. For existing user services, see below |
+| Nix package | Update source or the locked flake version, run `nix build` again, switch the actual startup path to the new package, then manually restart the service |
 | NixOS service | Update the `file-station` locked version in your system flake and run `nixos-rebuild switch` |
 
 After upgrading, reopen the page and confirm shares, settings, and files work as expected. Switching to an old program or NixOS generation does not restore files or the state database; use a consistent backup when restoration is needed.
-
-### Existing user services
-
-Only if you already have a `file-station.service` user service whose `ExecStart` points to `$HOME/.local/state/file-station/current/bin/file-station`, run this from the updated repository:
-
-```sh
-./test/update-service.sh
-```
-
-The script builds the Nix package, updates the `current` link, and restarts the user service. It does not install a service, change configuration, passwords, or state, or update NixOS system services. It does not restart if the build fails or the user unit is missing. For services using other executable paths, update the actual deployment path and restart accordingly. Old-name services require manual migration first; the script neither migrates nor restarts them.
 
 ### Legacy migration
 
@@ -369,7 +357,7 @@ The old `nixos-file-station` executable/package, `services.nixos-file-station`, 
 1. **Obtain or successfully build the new version first, then stop the old service and back up** the entire state, shares and recycle bins, configuration, passwords, and unit/drop-ins. Keep backups outside state and all shares. Never run old and new services against the same state database concurrently.
 2. Explicitly retain the original state path (old default `/var/lib/nixos-file-station`, new default `/var/lib/file-station`): use JSON `stateDir`, Docker environment-variable `ConfigPath`, aligned configuration and mounts in container JSON mode, or NixOS `services.file-station.stateDir`. Alternatively, migrate all state while stopped and correctly adjust ownership. **Never delete and recreate the database.**
 3. Preserve the original password and necessary startup settings. Move old environment passwords into JSON `password` or `passwordFile`; retain systemd credentials and `passwordSourceFile` protection as needed. Use JSON for custom listeners and similar settings; select the frontend only with `-static`. New default `0022` is less restrictive: set `0027` for the old `0640/0750` permissions (Docker uses `UMASK`); NixOS remains `0077`.
-4. For NixOS, update the module name/options and rebuild. For old user services, first inspect the original setup with `systemctl --user cat nixos-file-station.service`. Before stopping the service in step 1, you can prepare the new package with `mkdir -p "$HOME/.local/state/file-station" && nix build path:.#default --out-link "$HOME/.local/state/file-station/current"`. After backing up, create `~/.config/systemd/user/file-station.service` (create its parent directory if necessary), retaining credentials, mount dependencies, and custom settings. Set `ExecStart` to `%h/.local/state/file-station/current/bin/file-station -config "/absolute/path/to/existing-config.json"`, replacing it with the real original configuration path and retaining the quotes; the Nix package needs no separate `-static`. Back up and merge any existing new unit/drop-ins rather than overwriting them. Then run in order:
+4. For NixOS, update the module name/options and rebuild. For old user services, first prepare the new Nix package or identify the path to an already installed new version, and inspect the original setup with `systemctl --user cat nixos-file-station.service`. After backing up, create `~/.config/systemd/user/file-station.service` (create its parent directory if necessary), retaining credentials, mount dependencies, and custom settings. Back up and merge any existing new unit/drop-ins rather than overwriting them. Set the new unit's startup line to `ExecStart="/absolute/path/to/new-package/bin/file-station" -config "/absolute/path/to/existing-config.json"`, replacing both paths with the real absolute paths to the new executable and original configuration. Retain quotes around both the executable and configuration paths to support spaces; the Nix package needs no separate `-static`. Then run in order:
 
    ```sh
    systemctl --user stop nixos-file-station.service
@@ -379,6 +367,6 @@ The old `nixos-file-station` executable/package, `services.nixos-file-station`, 
    systemctl --user status file-station.service --no-pager
    ```
 
-5. The session cookie has been renamed, so sign in again. Confirm the original shares, settings, and files remain, and migrate monitoring, log commands, and unit overrides. User-service logs are available with `journalctl --user -u file-station.service`. Subsequent updates can use the script if the service follows the path convention above.
+5. The session cookie has been renamed, so sign in again. Confirm the original shares, settings, and files remain, and migrate monitoring, log commands, and unit overrides. User-service logs are available with `journalctl --user -u file-station.service`.
 
 Maintainer release guide: [RELEASING.md](https://github.com/CYL96/File-Station/blob/main/RELEASING.md).

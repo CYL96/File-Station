@@ -300,17 +300,15 @@ chmod 600 "$HOME/.config/file-station/config.json" "$HOME/.config/file-station/p
 2. 在「设置 → 共享设置」添加已有、可访问、互不重叠的目录；Docker 填容器内挂载路径。
 3. 按需设为只读。共享不能覆盖状态目录或密码路径；目录选择器从 `/` 浏览不等于允许共享 `/`，通常应选择具体数据子目录而非整个 home。
 
-共享列表的上移、下移按钮可调整显示顺序，自动保存并同步到左侧共享导航；刷新页面或重启服务后仍保留。
-
 保存立即生效。移除共享不删除文件；文件请求处理中共享变更返回 409，有活动任务时不能修改或移除受影响共享；回收站非空时不能改路径或移除。目录丢失、挂载未就绪或权限不足会标为不可用，不自动删除配置。
 
 ### 日常操作与界面设置
 
 - 在列表或网格中浏览、搜索、排序和多选，执行上传下载、新建、重命名、复制、移动及回收站操作；冲突时可跳过、替换文件或保留两份，同名目录不递归覆盖。
-- 任务中心显示进度并支持取消。复制、移动和回收站失败任务可重试未完成项，保留旧记录；旧任务缺少重试参数时需重新发起。上传重试仅限当前页面，刷新或退出后须重选文件。重启后未完成任务标为中断，不自动重放。
-- 顶部切换中英文，选择保存在当前浏览器。「设置 → 通用设置」设置日期格式及权限列的八进制/符号显示；「高级设置 → 列显示」启用权限列。这些设置不改变文件内容或实际权限。
+- 任务中心显示进度并支持取消。复制、移动和回收站失败任务可重试未完成项，保留旧记录。上传重试仅限当前页面，刷新或退出后须重选文件。重启后未完成任务标为中断，不自动重放。
+- 可设置界面语言、日期格式和权限显示格式；显示设置不改变文件内容或实际权限。
 - 图片可预览；MP4/WebM 使用浏览器原生播放，无服务端转码。MP4 建议 H.264 + AAC，实际支持取决于浏览器和系统，不支持时可下载。
-- 文本和 Markdown 可编辑，具体限制见[文件操作与编辑](#文件操作与编辑)。Markdown 可视化编辑期间切换语言会保留正文和未保存状态，但重置撤销历史、光标及未提交插入弹窗；先完成弹窗操作再切换。
+- 文本和 Markdown 可编辑，具体限制见[文件操作与编辑](#文件操作与编辑)。
 
 ## 安全与限制
 
@@ -326,14 +324,14 @@ chmod 600 "$HOME/.config/file-station/config.json" "$HOME/.config/file-station/p
 - 新文件权限为 `0666 & ~umask`，新目录为 `0777 & ~umask`；默认 `0022` 对应 `0644/0755`，NixOS `0077` 对应 `0600/0700`，仍受系统 ACL 等规则约束。文本保存、同文件系统移动和回收站恢复保留原权限；复制不保留所有者、ACL、扩展属性、硬链接关系或原始时间。
 - 上传和复制先写隐藏暂存文件；取消不回滚已完成项，中断可能残留暂存文件，确认无任务后再清理。同文件系统移动为原子重命名，跨文件系统先复制后删除，**不是整体事务**，失败可能两端都保留。
 - 文本编辑限已有、不含 NUL、≤1 MiB 的 UTF-8 普通文件；只读共享、回收站、无写权限或多硬链接文件不能保存。保存须保留权限、属主/组、ACL 和扩展属性，否则拒绝；原子替换会改变 inode 和时间。外部修改报告冲突并保留草稿，但**不是文件系统级 CAS**；统一 CRLF 保留，其他换行统一为 LF。
-- Markdown 预览不执行原始 HTML、不自动加载外部图片。可视化编辑会重新序列化 Markdown；需要逐字保留时用源码编辑。
+- Markdown 预览不执行原始 HTML、不自动加载外部图片。可视化编辑会重新序列化 Markdown；需要逐字保留时用源码编辑。可视化编辑期间切换语言会保留正文和未保存状态，但重置撤销历史、光标及未提交插入弹窗；先完成弹窗操作再切换。
 
 ### 密码与网络
 
-- 密码文件和含密码配置设为 `0600`，置于共享之外，不提交仓库、镜像层或 Nix store。环境变量及 Compose 明文可被 `docker inspect` 或有权限的宿主管理员读取；需要减少环境变量暴露时使用只读 JSON / 密码文件。
+- 密码文件和含密码配置设为 `0600`，置于共享之外，不提交仓库、镜像层或 Nix store。Nix 用户还须将配置和密码放在源码树之外，避免 `path:` 构建将其复制进通常可被所有本地用户读取的 store。环境变量及 Compose 明文可被 `docker inspect` 或有权限的宿主管理员读取；需要减少环境变量暴露时使用只读 JSON / 密码文件。
 - 会话有效期 12 小时，Cookie 使用 HttpOnly、SameSite=Strict，并有 CSRF 防护。HTTPS 代理下启用 `secureCookies`（NixOS 同名选项；Docker 需 JSON 模式）；普通 HTTP 启用后浏览器不会发送会话 Cookie。
 - 反向代理保留 Host，页面与 API 同源；关闭 `/api/events` 的 SSE 缓冲并延长连接超时，按需设置上传大小限制。仅向可信网络开放必要端口，优先使用 HTTPS；NixOS 不自动开放防火墙。
-- 「高级设置 → 关于 File Station → 检查更新」由服务端访问 GitHub，仅检查正式 Release 并提供发布页链接，**不自动下载安装**。
+- 内置更新检查由服务端访问 GitHub，仅检查正式 Release 并提供发布页链接，**不自动下载安装**。
 
 ## 升级与旧版迁移
 
@@ -347,20 +345,10 @@ chmod 600 "$HOME/.config/file-station/config.json" "$HOME/.config/file-station/p
 | Docker / Compose（本地源码构建） | 更新本地仓库到目标版本，保留 `.env`、`./state`、挂载和运行 UID/GID；停服务并完成上述一致备份后，运行 `docker compose up -d --build` |
 | 预编译二进制 | 下载目标版本及校验和，校验并解压到新目录；停止旧进程，将启动命令或服务改为新二进制和配套 `web/dist`，使用原配置启动 |
 | 源码构建 | 更新源码后重新构建前后端；停止旧进程，部署配套产物并使用原配置启动 |
-| Nix 包 | 更新源码或 flake 锁定版本，重新 `nix build`，将启动路径切换到新包并重启；已有用户服务见下节 |
+| Nix 包 | 更新源码或 flake 锁定版本，重新 `nix build`，将实际启动路径切换到新包，再手动重启服务 |
 | NixOS 服务 | 更新系统 flake 中 `file-station` 的锁定版本，执行 `nixos-rebuild switch` |
 
 升级后重新访问页面，确认共享、设置和文件正常。切回旧程序或 NixOS generation 不会还原文件与状态数据库；需要恢复时使用一致备份。
-
-### 已有用户服务
-
-仅当已有 `file-station.service` 用户服务，且 `ExecStart` 指向 `$HOME/.local/state/file-station/current/bin/file-station` 时，可从更新后的仓库运行：
-
-```sh
-./test/update-service.sh
-```
-
-脚本构建 Nix 包、更新 `current` 链接并重启用户服务；不安装服务，不修改配置、密码或状态，也不更新 NixOS 系统服务。构建失败或找不到该用户 unit 时不会重启。服务使用其他启动路径时，按实际部署更新路径并重启。旧名称服务须先手动迁移，脚本不会迁移或重启它。
 
 ### 旧版迁移
 
@@ -369,7 +357,7 @@ chmod 600 "$HOME/.config/file-station/config.json" "$HOME/.config/file-station/p
 1. **先取得或构建成功的新版本，再停旧服务并备份**完整状态、共享及回收站、配置、密码和 unit/drop-in；备份放在状态及所有共享之外。禁止新旧服务同时访问同一状态库。
 2. 显式保留原状态路径（旧默认 `/var/lib/nixos-file-station`，新默认 `/var/lib/file-station`）：JSON 用 `stateDir`，Docker 环境变量模式用 `ConfigPath`，容器 JSON 模式同时匹配配置与挂载，NixOS 用 `services.file-station.stateDir`。也可停机完整迁移并正确调整属主，**绝不能删库重建**。
 3. 保留原密码与必要启动设置。旧环境密码须迁入 JSON `password` 或 `passwordFile`；systemd 凭据和 `passwordSourceFile` 保护按需保留。自定义监听等配置改用 JSON，前端目录只用 `-static`。新默认 `0022` 比旧权限宽；需旧 `0640/0750` 时设置 `0027`（Docker 用 `UMASK`），NixOS 仍为 `0077`。
-4. NixOS 更新模块名和选项后 rebuild。旧用户服务先用 `systemctl --user cat nixos-file-station.service` 检查原配置；步骤 1 停机前可用 `mkdir -p "$HOME/.local/state/file-station" && nix build path:.#default --out-link "$HOME/.local/state/file-station/current"` 准备新包。备份后创建 `~/.config/systemd/user/file-station.service`（必要时先创建父目录），保留凭据、挂载依赖和自定义项。将 `ExecStart` 改为 `%h/.local/state/file-station/current/bin/file-station -config "/absolute/path/to/existing-config.json"`，替换为真实的原配置路径并保留引号；Nix 包无需另传 `-static`。已有新 unit/drop-in 时先备份、合并，不直接覆盖。然后依次执行：
+4. NixOS 更新模块名和选项后 rebuild。旧用户服务先准备新 Nix 包或确认已安装新版本的路径，并用 `systemctl --user cat nixos-file-station.service` 检查原配置。备份后创建 `~/.config/systemd/user/file-station.service`（必要时先创建父目录），保留凭据、挂载依赖和自定义项；已有新 unit/drop-in 时先备份、合并，不直接覆盖。将新 unit 的启动行改为 `ExecStart="/absolute/path/to/new-package/bin/file-station" -config "/absolute/path/to/existing-config.json"`，替换为新程序和原配置的真实绝对路径，保留可执行文件及配置路径两侧的引号以支持空格；Nix 包无需另传 `-static`。然后依次执行：
 
    ```sh
    systemctl --user stop nixos-file-station.service
@@ -379,6 +367,6 @@ chmod 600 "$HOME/.config/file-station/config.json" "$HOME/.config/file-station/p
    systemctl --user status file-station.service --no-pager
    ```
 
-5. 会话 Cookie 已更名，需重新登录。确认原共享、设置和文件仍在，迁移监控、日志命令及 unit 覆盖；用户服务日志用 `journalctl --user -u file-station.service`。后续符合上节路径约定的用户服务可使用更新脚本。
+5. 会话 Cookie 已更名，需重新登录。确认原共享、设置和文件仍在，迁移监控、日志命令及 unit 覆盖；用户服务日志用 `journalctl --user -u file-station.service`。
 
 维护者发布说明：[RELEASING.md](https://github.com/CYL96/File-Station/blob/main/RELEASING.md)。
