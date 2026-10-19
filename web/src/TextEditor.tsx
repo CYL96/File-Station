@@ -4,6 +4,7 @@ import { Icon, Modal, formatBytes } from './ui';
 import { Markdown, isMarkdown } from './Markdown';
 import { MarkdownVisualEditor } from './MarkdownVisualEditor';
 import { useI18n } from './i18n';
+import { CodeView } from './CodeView';
 
 type TextDocument = { content: string; version: string };
 export function TextEditor({ share, path, name, onClose, onSaved }: { share: string; path: string; name: string; onClose: () => void; onSaved: () => void }) {
@@ -20,7 +21,7 @@ export function TextEditor({ share, path, name, onClose, onSaved }: { share: str
   const [mode, setMode] = useState<'source' | 'split' | 'visual'>('source');
   const markdown = isMarkdown(name);
   const writing = useRef(false);
-  const area = useRef<HTMLTextAreaElement>(null);
+  const area = useRef<HTMLElement | null>(null);
   const preview = useRef<HTMLDivElement>(null);
   const scrollProgress = useRef(0);
   const syncedScroll = useRef(new WeakMap<HTMLElement, number>());
@@ -107,13 +108,7 @@ export function TextEditor({ share, path, name, onClose, onSaved }: { share: str
     {loading ? <div className="loading-state" role="status"><span className="spinner" />{t('正在读取文本…')}</div> : document && <>
       {markdown && mode === 'visual' && <p className="field-help markdown-mode-help">{t('直接编辑渲染内容；修改后会按 Markdown 重新序列化，可能规范化空格、列表及表格格式。需要逐字保留格式时使用源代码编辑。')}</p>}
       <div className={`editor-workspace ${markdown && mode === 'split' ? 'editor-split' : ''}`}>
-      {markdown && mode === 'visual' ? <MarkdownVisualEditor key={locale} value={text} share={share} path={path} disabled={busy} onChange={value => { setText(value); setSaved(false); }} /> : <><label className="sr-only" htmlFor="file-editor-content">{t('文件内容')}</label><textarea id="file-editor-content" ref={area} className="file-editor-content" value={text} disabled={busy} spellCheck={false} autoCapitalize="off" autoCorrect="off" wrap="off" onScroll={event => syncScroll(event.currentTarget)} onChange={event => { setText(event.target.value); setSaved(false); }} onKeyDown={event => {
-        if (event.key === 'Tab' && !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey) {
-          event.preventDefault(); const node = event.currentTarget; const start = node.selectionStart; const end = node.selectionEnd;
-          setText(current => current.slice(0, start) + '\t' + current.slice(end)); setSaved(false);
-          requestAnimationFrame(() => { area.current?.setSelectionRange(start + 1, start + 1); });
-        }
-      }} />{markdown && mode === 'split' && <div ref={preview} className="editor-markdown-preview" aria-label={t('Markdown 实时预览')} onScroll={event => syncScroll(event.currentTarget)}><Markdown text={text} share={share} path={path} /></div>}</>}
+      {markdown && mode === 'visual' ? <MarkdownVisualEditor key={locale} value={text} share={share} path={path} disabled={busy} onChange={value => { setText(value); setSaved(false); }} /> : <><CodeView value={text} name={name} editable disabled={busy} label={t('文件内容')} contentId="file-editor-content" className="file-editor-content" onScroller={node => { area.current = node; }} onScroll={syncScroll} onChange={value => { setText(value); setSaved(false); }} />{markdown && mode === 'split' && <div ref={preview} className="editor-markdown-preview" aria-label={t('Markdown 实时预览')} onScroll={event => syncScroll(event.currentTarget)}><Markdown text={text} share={share} path={path} /></div>}</>}
       </div>
       <div className="editor-status"><span>UTF-8 · {crlf ? 'CRLF' : 'LF'} · {formatBytes(bytes)} / 1 MiB</span><span role="status">{t(busy ? '正在保存…' : saved ? '已保存' : dirty ? '未保存' : '未修改')}</span></div>
       {tooLarge && <p className="form-error" role="alert">{t('内容超过 1 MiB，缩短后才能保存。')}</p>}

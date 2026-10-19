@@ -9,6 +9,7 @@ import { useFileDialogWidth } from './useFileDialogWidth';
 import type { FileDialogKind } from './useFileDialogWidth';
 import { formatDate } from './dateFormat';
 import { getLocale, useI18n } from './i18n';
+import { CodeView } from './CodeView';
 
 export type IconName = 'folder' | 'file' | 'image' | 'video' | 'trash' | 'upload' | 'download' | 'plus' | 'search' | 'chevron' | 'refresh' | 'copy' | 'move' | 'edit' | 'close' | 'tasks' | 'check' | 'logout' | 'menu' | 'grid' | 'list' | 'restore' | 'eye' | 'eye-off' | 'lock' | 'help' | 'server' | 'arrow' | 'warning' | 'settings';
 const shapes: Record<IconName, ReactNode> = {
@@ -105,7 +106,7 @@ export function Preview({ share, entry, dateFormat, onClose, onEdit }: { share: 
       {content.error ? <div className="empty-state"><Icon name="file" size={48} /><h3>{t('无法预览此文件')}</h3><p>{t(content.error)}</p><p>{t('支持常见图片、MP4 / WebM 视频以及不超过 1 MiB 的 UTF-8 文本；视频能否播放取决于浏览器支持的编码，其他文件请下载查看。')}</p></div>
         : content.videoURL ? <VideoPreview key={content.videoURL} share={share} path={entry.path} url={content.videoURL} name={entry.name} />
         : content.url ? <ImagePreview key={content.url} url={content.url} name={entry.name} onError={() => setContent({ error: '图片无法解码，文件可能已损坏或不是受支持的图片。' })} />
-        : content.text !== undefined ? isMarkdown(entry.name) ? <Markdown text={content.text} share={share} path={entry.path} /> : <pre className="preview-text">{content.text}</pre>
+        : content.text !== undefined ? isMarkdown(entry.name) ? <Markdown text={content.text} share={share} path={entry.path} /> : <CodeView key={entry.path} value={content.text} name={entry.name} className="preview-code" label={t('文件内容')} />
         : <div className="loading-state" role="status"><span className="spinner" />{t('正在加载预览…')}</div>}
     </div>
     <footer className="modal-actions preview-footer"><span>{formatBytes(entry.size)} · {formatDate(entry.modified, dateFormat)}</span><span className="preview-resize-help">{t('拖动右下角可调整宽度')}</span></footer>

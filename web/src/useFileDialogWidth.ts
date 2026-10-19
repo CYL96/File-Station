@@ -1,12 +1,17 @@
 import { useLayoutEffect, useRef } from 'react';
 import type { RefObject } from 'react';
+import { EditorView } from '@codemirror/view';
 
 export type FileDialogKind = 'preview' | 'editor';
 
-const mirrorProperties = [
+const textProperties = [
   'font-family', 'font-size', 'font-weight', 'font-style', 'font-stretch', 'font-variant',
   'font-feature-settings', 'font-variation-settings', 'font-kerning', 'letter-spacing',
   'word-spacing', 'line-height', 'text-transform', 'text-indent', 'text-align', 'tab-size',
+] as const;
+
+const mirrorProperties = [
+  ...textProperties,
   'white-space', 'word-break', 'overflow-wrap', 'display', 'box-sizing',
   'padding-top', 'padding-right', 'padding-bottom', 'padding-left',
   'margin-top', 'margin-right', 'margin-bottom', 'margin-left',
@@ -23,13 +28,10 @@ function horizontalBox(node: HTMLElement) {
 // A separate max-content mirror releases width/max-width constraints on every child,
 // including Markdown's scrolling tables/code blocks and responsive images. Its width
 // never depends on the live pane's current width, so deleting a long line can shrink it.
-function intrinsicWidth(node: HTMLElement, mirror: HTMLElement) {
-  const clone = node instanceof HTMLTextAreaElement ? document.createElement('pre') : node.cloneNode(true) as HTMLElement;
-  if (node instanceof HTMLTextAreaElement) clone.textContent = node.value || ' ';
-  const originals = [node, ...node.querySelectorAll<HTMLElement>('*')];
-  const copies = [clone, ...clone.querySelectorAll<HTMLElement>('*')];
-  copies.forEach((copy, index) => {
-    const original = originals[index];
+function intrinsicWidth(node: HTMLElement, mirror: HTMLElement, scrollbar: number) {
+  const cloneNode = (original: Node): Node => {
+    if (!(original instanceof HTMLElement)) return original.cloneNode(true);
+    const copy = original.cloneNode(false) as HTMLElement;
     const style = getComputedStyle(original);
     copy.removeAttribute('id');
     for (const property of mirrorProperties) copy.style.setProperty(property, style.getPropertyValue(property));
@@ -37,15 +39,42 @@ function intrinsicWidth(node: HTMLElement, mirror: HTMLElement) {
       width: 'max-content', minWidth: '0', maxWidth: 'none', height: 'auto', minHeight: '0',
       maxHeight: 'none', overflow: 'visible', position: 'static', flex: 'none',
     });
+    if (original.classList.contains('code-view')) {
+      // Neither the flex header's resolved auto margins nor CodeMirror's virtual
+      // viewport/search/selection DOM describes an intrinsic document width.
+      // Stop here and mirror only the full document with stable text/box metrics.
+      copy.style.display = 'block';
+      copy.style.marginLeft = '0';
+      copy.style.marginRight = '0';
+      const content = original.querySelector<HTMLElement>('.cm-content');
+      const editor = content && EditorView.findFromDOM(content);
+      if (editor) {
+        const text = document.createElement('div');
+        const contentStyle = getComputedStyle(editor.contentDOM);
+        const line = editor.contentDOM.querySelector<HTMLElement>('.cm-line');
+        const lineStyle = line ? getComputedStyle(line) : null;
+        for (const property of textProperties) text.style.setProperty(property, contentStyle.getPropertyValue(property));
+        Object.assign(text.style, {
+          width: 'max-content', whiteSpace: 'pre', wordBreak: 'normal', overflowWrap: 'normal',
+          paddingLeft: `${(parseFloat(contentStyle.paddingLeft) || 0) + (parseFloat(lineStyle?.paddingLeft ?? '') || 0)}px`,
+          paddingRight: `${(parseFloat(contentStyle.paddingRight) || 0) + (parseFloat(lineStyle?.paddingRight ?? '') || 0) + scrollbar}px`,
+          tabSize: String(editor.state.tabSize),
+        });
+        text.textContent = editor.state.doc.toString() || ' ';
+        copy.append(text);
+      }
+      return copy;
+    }
     if (original instanceof HTMLImageElement) {
       copy.removeAttribute('src');
       copy.removeAttribute('srcset');
       copy.style.width = `${original.naturalWidth}px`;
     }
     if (original.tagName === 'TABLE') copy.style.display = 'table';
-  });
-  // Textareas have no intrinsic pre margin; use their actual border/padding/font.
-  if (node instanceof HTMLTextAreaElement) { clone.style.margin = '0'; clone.style.whiteSpace = 'pre'; }
+    for (const child of original.childNodes) copy.appendChild(cloneNode(child));
+    return copy;
+  };
+  const clone = cloneNode(node) as HTMLElement;
   mirror.replaceChildren(clone);
   const width = clone.getBoundingClientRect().width;
   mirror.replaceChildren();
@@ -78,7 +107,7 @@ export function useFileDialogWidth(ref: RefObject<HTMLDialogElement | null>, kin
     let viewportWidth = window.visualViewport?.width ?? document.documentElement.clientWidth;
     let disposed = false;
     const paneWidth = (node: HTMLElement, boundary: HTMLElement) => {
-      let width = intrinsicWidth(node, mirror);
+      let width = intrinsicWidth(node, mirror, scrollbar);
       // Reserve scrollbar space independently of whether this version happens to
       // overflow vertically; scrollbar-gutter:stable uses the same space in the UI.
       for (let ancestor: HTMLElement | null = node; ancestor && ancestor !== boundary; ancestor = ancestor.parentElement) {
@@ -97,12 +126,12 @@ export function useFileDialogWidth(ref: RefObject<HTMLDialogElement | null>, kin
       if (!small) {
         let contentWidth = 0;
         if (kind === 'preview') {
-          const content = body.querySelector<HTMLElement>('.preview-text, .markdown-content, .preview-image');
+          const content = body.querySelector<HTMLElement>('.preview-code, .markdown-content, .preview-image');
           if (content) contentWidth = paneWidth(content, body);
         } else {
           const workspace = body.querySelector<HTMLElement>('.editor-workspace');
           if (workspace) {
-            const source = workspace.querySelector<HTMLTextAreaElement>('textarea');
+            const source = workspace.querySelector<HTMLElement>('.file-editor-content');
             const rendered = workspace.querySelector<HTMLElement>('.markdown-content, .toastui-editor-ww-container .toastui-editor-contents');
             const sourceWidth = source ? paneWidth(source, workspace) : 0;
             const renderedWidth = rendered ? paneWidth(rendered, workspace) : 0;
@@ -125,7 +154,16 @@ export function useFileDialogWidth(ref: RefObject<HTMLDialogElement | null>, kin
       if (!frame) frame = requestAnimationFrame(measure);
     };
     schedule.current = enqueue;
-    const observer = new MutationObserver(() => enqueue());
+    const observer = new MutationObserver(mutations => {
+      const affectsContent = mutations.some(mutation => {
+        const target = mutation.target instanceof HTMLElement ? mutation.target : mutation.target.parentElement;
+        // Keep editor mounts/replacements and external Markdown changes, but not
+        // virtual scrolling, search panels or selection painting inside an editor.
+        // Document changes already schedule a measurement through revision.
+        return !target?.closest('.cm-editor');
+      });
+      if (affectsContent) enqueue();
+    });
     observer.observe(body, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['src'] });
     const loaded = () => enqueue();
     body.addEventListener('load', loaded, true);

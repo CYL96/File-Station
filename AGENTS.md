@@ -58,6 +58,7 @@ docker build -t file-station:local .
 - TypeScript 使用两空格、单引号、分号；组件文件为 PascalCase，hook 为 `useXxx.ts`。样式使用现有 CSS、kebab-case 类名和 CSS 变量。界面及用户错误文案用中文。
 - Go JSON 字段与 `web/src/api.ts` 类型手动同步。JSON 使用 `request<T>()`，预览和上传复用专用 helper；通过 `ApiError`、组件错误状态或通知展示失败，401 沿用统一会话清理。
 - 异步逻辑沿用 effect 级 `AbortController`、会话 epoch 防止旧响应回写，以及串行弹框/上传队列；不要另建重复的请求或状态机制。
+- 文本预览和源码编辑复用 `CodeView` 的 CodeMirror 视图，按文件名识别语言并使用 GitHub Light。`useFileDialogWidth` 只用完整文档和静态字体、盒模型测量代码宽度，不克隆工具栏、搜索面板或虚拟滚动节点；忽略 `.cm-editor` 内部 DOM 变化，正文及模式变化通过 `revision` / `mode` 触发测量，避免滚动、选择或查找覆盖手动调整的宽度。
 
 ## Important Files
 
