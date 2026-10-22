@@ -16,21 +16,24 @@ type View = {
   y: number;
 };
 
-function fitScale(view: View) {
+function baseScale(view: View, fillWindow: boolean) {
   if (!view.width || !view.height || !view.naturalWidth || !view.naturalHeight) return 0;
-  return Math.min(1, view.width / view.naturalWidth, view.height / view.naturalHeight);
+  const widthScale = view.width / view.naturalWidth;
+  const heightScale = view.height / view.naturalHeight;
+  const scale = Math.min(widthScale, heightScale);
+  return fillWindow ? scale : Math.min(1, scale);
 }
 
-function panLimits(view: View) {
-  const scale = fitScale(view) * view.zoom;
+function panLimits(view: View, fillWindow: boolean) {
+  const scale = baseScale(view, fillWindow) * view.zoom;
   return {
     x: Math.max(0, (view.naturalWidth * scale - view.width) / 2),
     y: Math.max(0, (view.naturalHeight * scale - view.height) / 2),
   };
 }
 
-function constrain(view: View): View {
-  const limits = panLimits(view);
+function constrain(view: View, fillWindow: boolean): View {
+  const limits = panLimits(view, fillWindow);
   return {
     ...view,
     x: Math.max(-limits.x, Math.min(limits.x, view.x)),
@@ -38,7 +41,7 @@ function constrain(view: View): View {
   };
 }
 
-export function ImagePreview({ url, name, onError }: { url: string; name: string; onError: () => void }) {
+export function ImagePreview({ url, name, onError, fillWindow, onFillWindowChange }: { url: string; name: string; onError: () => void; fillWindow: boolean; onFillWindowChange: (fillWindow: boolean) => void }) {
   const { t } = useI18n();
   const viewportRef = useRef<HTMLDivElement>(null);
   const [view, setView] = useState<View>({ width: 0, height: 0, naturalWidth: 0, naturalHeight: 0, zoom: 1, x: 0, y: 0 });
@@ -54,16 +57,16 @@ export function ImagePreview({ url, name, onError }: { url: string; name: string
   function measure(naturalWidth = viewRef.current.naturalWidth, naturalHeight = viewRef.current.naturalHeight) {
     const viewport = viewportRef.current;
     if (!viewport) return;
-    updateView(constrain({ ...viewRef.current, width: viewport.clientWidth, height: viewport.clientHeight, naturalWidth, naturalHeight }));
+    updateView(constrain({ ...viewRef.current, width: viewport.clientWidth, height: viewport.clientHeight, naturalWidth, naturalHeight }, fillWindow));
   }
 
   function zoomTo(zoom: number, anchorX = 0, anchorY = 0) {
     const current = viewRef.current;
-    if (!fitScale(current)) return;
+    if (!baseScale(current, fillWindow)) return;
     const nextZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoom));
     const ratio = nextZoom / current.zoom;
     // Keep the image point beneath the anchor stationary until an edge is reached.
-    updateView(constrain({ ...current, zoom: nextZoom, x: anchorX - (anchorX - current.x) * ratio, y: anchorY - (anchorY - current.y) * ratio }));
+    updateView(constrain({ ...current, zoom: nextZoom, x: anchorX - (anchorX - current.x) * ratio, y: anchorY - (anchorY - current.y) * ratio }, fillWindow));
   }
 
   useEffect(() => {
@@ -84,11 +87,11 @@ export function ImagePreview({ url, name, onError }: { url: string; name: string
       observer.disconnect();
       viewport.removeEventListener('wheel', wheel);
     };
-  }, []);
+  }, [fillWindow]);
 
   function startDrag(event: PointerEvent<HTMLDivElement>) {
     if (!event.isPrimary || event.button !== 0 || dragRef.current) return;
-    const limits = panLimits(viewRef.current);
+    const limits = panLimits(viewRef.current, fillWindow);
     if (!limits.x && !limits.y) return;
     event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
@@ -100,7 +103,7 @@ export function ImagePreview({ url, name, onError }: { url: string; name: string
     const drag = dragRef.current;
     if (!drag || drag.pointerId !== event.pointerId) return;
     const current = viewRef.current;
-    updateView(constrain({ ...current, x: current.x + event.clientX - drag.x, y: current.y + event.clientY - drag.y }));
+    updateView(constrain({ ...current, x: current.x + event.clientX - drag.x, y: current.y + event.clientY - drag.y }, fillWindow));
     drag.x = event.clientX;
     drag.y = event.clientY;
   }
@@ -112,14 +115,19 @@ export function ImagePreview({ url, name, onError }: { url: string; name: string
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
   }
 
-  const scale = fitScale(view) * view.zoom;
-  const limits = panLimits(view);
+  const scale = baseScale(view, fillWindow) * view.zoom;
+  const limits = panLimits(view, fillWindow);
   const canPan = limits.x > 0 || limits.y > 0;
 
   return <div className="image-preview">
     <div className="image-preview-toolbar" role="group" aria-label={t('图片缩放')}>
       <button type="button" className="button" aria-label={t('缩小图片')} disabled={!scale || view.zoom <= MIN_ZOOM} onClick={() => zoomTo(viewRef.current.zoom / ZOOM_STEP)}>−</button>
-      <button type="button" className="button" aria-label={t('适应窗口')} disabled={!scale} onClick={() => updateView({ ...viewRef.current, zoom: 1, x: 0, y: 0 })}>{t('适应窗口')}</button>
+      <button type="button" className="button icon-button" aria-label={t('适应窗口')} title={t('适应窗口')} aria-pressed={!fillWindow} disabled={!scale} onClick={() => { onFillWindowChange(false); updateView({ ...viewRef.current, zoom: 1, x: 0, y: 0 }); }}>
+        <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5" /><rect x="7" y="8" width="10" height="8" rx="1" /></svg>
+      </button>
+      <button type="button" className="button icon-button" aria-label={t('铺满窗口')} title={t('铺满窗口（完整显示，后续图片沿用）')} aria-pressed={fillWindow} disabled={!scale} onClick={() => { onFillWindowChange(!fillWindow); updateView({ ...viewRef.current, zoom: 1, x: 0, y: 0 }); }}>
+        <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" /><path d="M7 10V7h3m4 0h3v3M7 14v3h3m4 0h3v-3M7 7l4 4m6-4-4 4m-6 6 4-4m6 4-4-4" /></svg>
+      </button>
       <button type="button" className="button" aria-label={t('放大图片')} disabled={!scale || view.zoom >= MAX_ZOOM} onClick={() => zoomTo(viewRef.current.zoom * ZOOM_STEP)}>+</button>
       <output className="image-preview-scale" aria-label={t('图片缩放比例')}>{scale ? `${Math.round(scale * 100)}%` : '—'}</output>
     </div>

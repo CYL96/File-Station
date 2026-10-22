@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { ApiError, apiURL, preview } from './api';
 import type { DateFormat, Entry } from './api';
@@ -60,26 +60,99 @@ export function ImageThumbnail({ share, entry, onOpen, size = 24 }: { share: str
     if (event.detail <= 1) onOpen();
   }} onDoubleClick={event => event.stopPropagation()}><ThumbnailImage key={src} src={src} size={size} /></button>;
 }
-export function Modal({ title, children, onClose, wide = false, headerContent, fileDialog }: { title: string; children: ReactNode; onClose: () => void; wide?: boolean; headerContent?: ReactNode; fileDialog?: { kind: FileDialogKind; content: unknown; mode?: string } }) {
+export function Modal({ title, children, onClose, wide = false, headerContent, fileDialog, allowFullscreen = false }: { title: string; children: ReactNode; onClose: () => void; wide?: boolean; headerContent?: ReactNode; fileDialog?: { kind: FileDialogKind; content: unknown; mode?: string }; allowFullscreen?: boolean }) {
   const { t } = useI18n();
   const ref = useRef<HTMLDialogElement>(null);
+  const fullscreenRef = useRef<HTMLDivElement>(null);
   const backdropPress = useRef(false);
-  useFileDialogWidth(ref, fileDialog?.kind, fileDialog?.content, fileDialog?.mode);
+  const fullscreenActive = useRef(false);
+  const ignoreCancelUntil = useRef(0);
+  const [fullscreen, setFullscreen] = useState(false);
+  const [fullscreenBusy, setFullscreenBusy] = useState(false);
+  const [fullscreenError, setFullscreenError] = useState('');
+  const fullscreenSupported = Boolean(document.fullscreenEnabled && document.documentElement.requestFullscreen);
+  useFileDialogWidth(ref, fullscreen ? undefined : fileDialog?.kind, fileDialog?.content, fileDialog?.mode);
   useEffect(() => {
     const dialog = ref.current!;
     const focused = document.activeElement as HTMLElement | null;
     dialog.showModal();
     return () => { dialog.close(); focused?.focus(); };
   }, []);
-  return <dialog ref={ref} className={`modal ${wide ? 'modal-wide' : ''} ${fileDialog ? `file-dialog file-dialog-${fileDialog.kind}` : ''}`} aria-label={title} onCancel={event => { event.preventDefault(); onClose(); }} onPointerDown={event => { const bounds = event.currentTarget.getBoundingClientRect(); backdropPress.current = event.target === event.currentTarget && (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom); }} onClick={event => { const startedOutside = backdropPress.current; backdropPress.current = false; if (startedOutside && event.target === ref.current) { const bounds = ref.current!.getBoundingClientRect(); if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) onClose(); } }}>
-    <header className="modal-heading"><h2>{title}</h2>{headerContent}<button className="button icon-button modal-close" aria-label={t('关闭{title}', { title })} onClick={onClose}><Icon name="close" size={17} />{t('关闭')}</button></header>
+  useEffect(() => {
+    const target = fullscreenRef.current;
+    if (!target) return;
+    const changed = () => {
+      const active = document.fullscreenElement === target;
+      // A browser Escape can also dispatch dialog cancel while leaving fullscreen.
+      if (fullscreenActive.current && !active) ignoreCancelUntil.current = performance.now() + 250;
+      fullscreenActive.current = active;
+      setFullscreen(active);
+    };
+    document.addEventListener('fullscreenchange', changed);
+    return () => {
+      document.removeEventListener('fullscreenchange', changed);
+      if (document.fullscreenElement === target) void document.exitFullscreen().catch(() => { /* Removing the fullscreen element also exits fullscreen. */ });
+    };
+  }, [allowFullscreen]);
+  async function toggleFullscreen() {
+    const target = fullscreenRef.current;
+    if (!target || fullscreenBusy) return;
+    setFullscreenError('');
+    setFullscreenBusy(true);
+    const exiting = document.fullscreenElement === target;
+    try {
+      if (exiting) await document.exitFullscreen();
+      else await target.requestFullscreen();
+    } catch {
+      setFullscreenError(exiting ? '无法退出全屏，请使用浏览器的退出全屏操作后重试。' : '无法进入全屏，请检查浏览器权限后重试。');
+    } finally { setFullscreenBusy(false); }
+  }
+  async function close() {
+    if (document.fullscreenElement === fullscreenRef.current && fullscreenRef.current) {
+      if (fullscreenBusy) return;
+      setFullscreenError('');
+      setFullscreenBusy(true);
+      try { await document.exitFullscreen(); }
+      catch { setFullscreenError('无法退出全屏，请使用浏览器的退出全屏操作后重试。'); return; }
+      finally { setFullscreenBusy(false); }
+    }
+    onClose();
+  }
+  const contents = <>
+    <header className="modal-heading"><h2>{title}</h2>{headerContent}{allowFullscreen && <button type="button" className="button preview-fullscreen" disabled={!fullscreenSupported || fullscreenBusy} aria-label={t(fullscreen ? '退出全屏' : '全屏')} aria-pressed={fullscreen} title={!fullscreenSupported ? t('当前浏览器不支持图片全屏。') : undefined} onClick={() => void toggleFullscreen()}>{t(fullscreen ? '退出全屏' : '全屏')}</button>}<button type="button" className="button icon-button modal-close" aria-label={t('关闭{title}', { title })} onClick={() => void close()}><Icon name="close" size={17} />{t('关闭')}</button></header>
+    {allowFullscreen && !fullscreenSupported && <p className="preview-fullscreen-notice" role="status">{t('当前浏览器不支持图片全屏。')}</p>}
+    {fullscreenError && <p className="preview-fullscreen-error" role="alert">{t(fullscreenError)}</p>}
     {children}
+  </>;
+  return <dialog ref={ref} className={`modal ${wide ? 'modal-wide' : ''} ${fileDialog ? `file-dialog file-dialog-${fileDialog.kind}` : ''} ${allowFullscreen ? 'file-dialog-image' : ''} ${fullscreen ? 'modal-fullscreen' : ''}`} aria-label={title} onCancel={event => {
+    event.preventDefault();
+    if (document.fullscreenElement === fullscreenRef.current && fullscreenRef.current) { void toggleFullscreen(); return; }
+    if (performance.now() < ignoreCancelUntil.current) return;
+    void close();
+  }} onPointerDown={event => { const bounds = event.currentTarget.getBoundingClientRect(); backdropPress.current = event.target === event.currentTarget && (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom); }} onClick={event => { const startedOutside = backdropPress.current; backdropPress.current = false; if (startedOutside && event.target === ref.current) { const bounds = ref.current!.getBoundingClientRect(); if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) void close(); } }}>
+    {allowFullscreen ? <div ref={fullscreenRef} className="file-dialog-content">{contents}</div> : contents}
   </dialog>;
 }
-export function Preview({ share, entry, dateFormat, onClose, onEdit }: { share: string; entry: Entry; dateFormat: DateFormat; onClose: () => void; onEdit?: () => void }) {
+export function Preview({ share, entry, dateFormat, onClose, onEdit, previous, next, imagePosition, onNavigate }: { share: string; entry: Entry; dateFormat: DateFormat; onClose: () => void; onEdit?: () => void; previous?: Entry; next?: Entry; imagePosition?: { index: number; total: number }; onNavigate: (entry: Entry) => void }) {
   const { t } = useI18n();
   const [content, setContent] = useState<{ url?: string; videoURL?: string; text?: string; error?: string }>({});
+  const [fillWindow, setFillWindow] = useState(false);
+  const isImage = !entry.isDir && !entry.isSymlink && fileIcon(entry) === 'image';
   useEffect(() => {
+    if (!isImage) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+      const target = event.target;
+      if (target instanceof HTMLElement && (target.isContentEditable || target.closest('input, textarea, select, [role="textbox"]'))) return;
+      const adjacent = event.key === 'ArrowLeft' ? previous : event.key === 'ArrowRight' ? next : undefined;
+      if (!adjacent) return;
+      event.preventDefault();
+      onNavigate(adjacent);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [isImage, previous, next, onNavigate]);
+  useLayoutEffect(() => {
     setContent({});
     const controller = new AbortController();
     let url: string | undefined;
@@ -101,15 +174,15 @@ export function Preview({ share, entry, dateFormat, onClose, onEdit }: { share: 
     }).catch(error => { if (!controller.signal.aborted) setContent({ error: error instanceof ApiError ? error.message : '预览加载失败，请检查网络连接，或下载文件查看。' }); });
     return () => { controller.abort(); if (url) URL.revokeObjectURL(url); };
   }, [share, entry.path]);
-  return <Modal title={entry.name} wide fileDialog={{ kind: 'preview', content }} onClose={onClose} headerContent={<div className="preview-actions">{content.text !== undefined && onEdit && <button className="button" onClick={onEdit}><Icon name="edit" size={17} />{t('编辑文件')}</button>}<a className="button primary" href={apiURL('download', { share, path: entry.path })} download={entry.name}><Icon name="download" size={17} />{t('下载文件')}</a></div>}>
+  return <Modal title={entry.name} wide allowFullscreen={isImage} fileDialog={{ kind: 'preview', content }} onClose={onClose} headerContent={<div className="preview-actions">{content.text !== undefined && onEdit && <button className="button" onClick={onEdit}><Icon name="edit" size={17} />{t('编辑文件')}</button>}<a className="button primary" href={apiURL('download', { share, path: entry.path })} download={entry.name}><Icon name="download" size={17} />{t('下载文件')}</a></div>}>
     <div className={`preview-body${content.url ? ' preview-body-image' : content.videoURL ? ' preview-body-video' : ''}`}>
       {content.error ? <div className="empty-state"><Icon name="file" size={48} /><h3>{t('无法预览此文件')}</h3><p>{t(content.error)}</p><p>{t('支持常见图片、MP4 / WebM 视频以及不超过 1 MiB 的 UTF-8 文本；视频能否播放取决于浏览器支持的编码，其他文件请下载查看。')}</p></div>
         : content.videoURL ? <VideoPreview key={content.videoURL} share={share} path={entry.path} url={content.videoURL} name={entry.name} />
-        : content.url ? <ImagePreview key={content.url} url={content.url} name={entry.name} onError={() => setContent({ error: '图片无法解码，文件可能已损坏或不是受支持的图片。' })} />
+        : content.url ? <ImagePreview key={content.url} url={content.url} name={entry.name} fillWindow={fillWindow} onFillWindowChange={setFillWindow} onError={() => setContent({ error: '图片无法解码，文件可能已损坏或不是受支持的图片。' })} />
         : content.text !== undefined ? isMarkdown(entry.name) ? <Markdown text={content.text} share={share} path={entry.path} /> : <CodeView key={entry.path} value={content.text} name={entry.name} className="preview-code" label={t('文件内容')} />
         : <div className="loading-state" role="status"><span className="spinner" />{t('正在加载预览…')}</div>}
     </div>
-    <footer className="modal-actions preview-footer"><span>{formatBytes(entry.size)} · {formatDate(entry.modified, dateFormat)}</span><span className="preview-resize-help">{t('拖动右下角可调整宽度')}</span></footer>
+    <footer className="modal-actions preview-footer">{isImage && <nav className="preview-image-navigation" aria-label={t('图片导航')}><button type="button" className="button icon-button" aria-label={t('上一张图片')} title={t('上一张图片')} disabled={!previous} onClick={() => { if (previous) onNavigate(previous); }}><Icon name="arrow" size={17} /></button><span className="preview-image-position" role="status" aria-live="polite" aria-atomic="true" aria-label={imagePosition ? t('第 {index} 张，共 {total} 张图片', imagePosition) : t('当前图片不在目录筛选结果中')}>{imagePosition ? `${imagePosition.index} / ${imagePosition.total}` : '—'}</span><button type="button" className="button icon-button" aria-label={t('下一张图片')} title={t('下一张图片')} disabled={!next} onClick={() => { if (next) onNavigate(next); }}><Icon name="arrow" className="preview-next-arrow" size={17} /></button></nav>}<span>{formatBytes(entry.size)} · {formatDate(entry.modified, dateFormat)}</span><span className="preview-resize-help">{t('拖动右下角可调整宽度')}</span></footer>
   </Modal>;
 }
 export function formatBytes(value: number) {
