@@ -46,6 +46,8 @@ export default function App() {
   const [refresh, setRefresh] = useState(0);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [filter, setFilter] = useState('');
+  const [pathEditing, setPathEditing] = useState(false);
+  const [pathDraft, setPathDraft] = useState('');
   const [fileSettings, setFileSettings] = useState<FileSettings>(defaultFileSettings);
   const [generalSettings, setGeneralSettings] = useState<GeneralSettings>(defaultGeneralSettings);
   const [generalLoading, setGeneralLoading] = useState(true);
@@ -72,6 +74,9 @@ export default function App() {
   const settingsWriting = useRef(false);
   const fileInput = useRef<HTMLInputElement>(null);
   const filterInput = useRef<HTMLInputElement>(null);
+  const pathInput = useRef<HTMLInputElement>(null);
+  const pathEditButton = useRef<HTMLButtonElement>(null);
+  const restorePathFocus = useRef(false);
   const anchor = useRef<string | null>(null);
   const pendingRetries = useRef(new Set<string>());
   const previousTasks = useRef(new Map<string, Task['status']>());
@@ -87,6 +92,7 @@ export default function App() {
   const forwardHistory = useRef<View[]>([]);
 
   function setCurrentView(next: View) {
+    setPathEditing(false);
     viewRef.current = next;
     setView(next);
   }
@@ -96,6 +102,8 @@ export default function App() {
 
   function clearAuth() {
     authEpoch.current++;
+    setPathEditing(false);
+    restorePathFocus.current = false;
     clearHistory();
     configureSession(null, clearAuth);
     setSession(null); setShares([]); setEntries([]); setTasks([]); setUploads([]); setModal(null); setDrawer(false); setSelected(new Set()); setClipboard(null); setContextMenu(null);
@@ -144,6 +152,15 @@ export default function App() {
     if (columns.every((column, position) => column.key === fileSettings.columns[position].key)) return;
     await saveViewSettings({ ...fileSettings, columns });
   }
+  useEffect(() => {
+    if (pathEditing) {
+      pathInput.current?.focus();
+      pathInput.current?.select();
+    } else if (restorePathFocus.current) {
+      restorePathFocus.current = false;
+      pathEditButton.current?.focus();
+    }
+  }, [pathEditing]);
   useEffect(() => {
     configureSession(null, clearAuth);
     request<Session>('session').then(acceptSession).catch(error => { if (!(error instanceof ApiError && error.status === 401)) setLoginError(error instanceof Error ? error.message : '无法连接服务器'); }).finally(() => setChecking(false));
@@ -298,6 +315,14 @@ export default function App() {
     }
   }
   const pathParts = view.path.split('/').filter(Boolean);
+  function editPath() {
+    setPathDraft(`/${view.path}`);
+    setPathEditing(true);
+  }
+  function cancelPathEditing() {
+    restorePathFocus.current = true;
+    setPathEditing(false);
+  }
 
   function applyNavigation(next: View) {
     setCurrentView(next); setSelected(new Set()); setFilter(''); setSidebar(false); setContextMenu(null);
@@ -325,6 +350,7 @@ export default function App() {
   }
   async function refreshShares(change: ShareSettingsChange) {
     const epoch = authEpoch.current;
+    setPathEditing(false);
     setClipboard(null); setSelected(new Set()); setEntries([]); setContextMenu(null); setListError(''); anchor.current = null;
     if (change.removed || change.pathChanged) {
       backHistory.current = backHistory.current.filter(item => item.share !== change.id);
@@ -583,7 +609,32 @@ export default function App() {
       <main className="file-main">
         <input className="sr-only" ref={fileInput} type="file" multiple aria-label={t('选择上传文件')} onChange={event => { queueUploads(Array.from(event.target.files ?? [])); event.target.value = ''; }} />
         <section className="file-panel" aria-label={t(view.trash ? '回收站文件' : '文件列表')} onDragOver={event => { if (!readOnly && !view.trash && event.dataTransfer.types.includes('Files')) { event.preventDefault(); setDragging(true); } }} onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragging(false); }} onDrop={event => { event.preventDefault(); setDragging(false); queueUploads(Array.from(event.dataTransfer.files)); }}>
-          <div className="path-bar"><button className="icon-button mobile-menu" aria-label={t('展开共享目录')} onClick={() => setSidebar(!sidebar)} aria-expanded={sidebar}><Icon name="menu" /></button><button className="icon-button" aria-label={t('上一级目录')} disabled={!view.path || view.trash} onClick={() => navigate(view.share, pathParts.slice(0, -1).join('/'))}><Icon name="arrow" size={17} /></button><nav className="breadcrumbs" aria-label={t('当前路径')}><button onClick={() => navigate(view.share, '', view.trash)}><Icon name={view.trash ? 'trash' : 'folder'} size={17} /><span>{share?.name ?? t('共享目录')}{view.trash ? t(' · 回收站') : ''}</span></button>{!view.trash && pathParts.map((part, index) => <span key={index}><Icon name="chevron" size={12} /><button onClick={() => navigate(view.share, pathParts.slice(0, index + 1).join('/'))}>{part}</button></span>)}</nav>{readOnly && share && <span className="readonly-badge"><Icon name="lock" size={12} />{t('只读')}</span>}{view.trash ? <select aria-label={t('回收站共享目录')} className="text-input trash-share-select" value={view.share} onChange={event => navigate(event.target.value, '', true)}>{shares.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select> : <div className="path-actions"><button className="button" disabled={readOnly} onClick={() => setModal({ kind: 'mkdir' })}><Icon name="plus" size={18} />{t('新建文件夹')}</button><button className="button primary" disabled={readOnly} onClick={() => fileInput.current?.click()}><Icon name="upload" size={18} />{t('上传文件')}</button></div>}<button className={`icon-button ${loading ? 'is-loading' : ''}`} aria-label={t('刷新文件列表')} onClick={() => setRefresh(value => value + 1)}><Icon name="refresh" size={17} /></button></div>
+          <div className="path-bar">
+            <button className="icon-button mobile-menu" aria-label={t('展开共享目录')} onClick={() => setSidebar(!sidebar)} aria-expanded={sidebar}><Icon name="menu" /></button>
+            <button className="icon-button" aria-label={t('上一级目录')} disabled={!view.path || view.trash} onClick={() => navigate(view.share, pathParts.slice(0, -1).join('/'))}><Icon name="arrow" size={17} /></button>
+            <div className="path-location">
+              {pathEditing && share && !view.trash ? <form className="path-editor" onSubmit={event => {
+                event.preventDefault();
+                // Keep .. and literal filename characters for the server's boundary checks.
+                const path = pathDraft.split('/').filter(part => part !== '' && part !== '.').join('/');
+                cancelPathEditing();
+                navigate(view.share, path);
+              }} onKeyDown={event => {
+                if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); cancelPathEditing(); }
+              }}>
+                <input className="text-input" ref={pathInput} aria-label={t('目录路径（相对于当前共享根目录）')} placeholder="/" value={pathDraft} onChange={event => setPathDraft(event.target.value)} autoComplete="off" spellCheck={false} />
+                <button className="button" type="submit">{t('前往')}</button>
+                <button className="button" type="button" onClick={cancelPathEditing}>{t('取消')}</button>
+              </form> : <nav className="breadcrumbs" aria-label={t('当前路径')}>
+                <button onClick={() => navigate(view.share, '', view.trash)}><Icon name={view.trash ? 'trash' : 'folder'} size={17} /><span>{share?.name ?? t('共享目录')}{view.trash ? t(' · 回收站') : ''}</span></button>
+                {!view.trash && pathParts.map((part, index) => <span key={index}><Icon name="chevron" size={12} /><button onClick={() => navigate(view.share, pathParts.slice(0, index + 1).join('/'))}>{part}</button></span>)}
+                {share && !view.trash && <button className="path-edit-trigger" type="button" ref={pathEditButton} aria-label={t('输入路径')} title={t('输入路径')} onClick={editPath} />}
+              </nav>}
+            </div>
+            {readOnly && share && <span className="readonly-badge"><Icon name="lock" size={12} />{t('只读')}</span>}
+            {view.trash ? <select aria-label={t('回收站共享目录')} className="text-input trash-share-select" value={view.share} onChange={event => navigate(event.target.value, '', true)}>{shares.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select> : <div className="path-actions"><button className="button" disabled={readOnly} onClick={() => setModal({ kind: 'mkdir' })}><Icon name="plus" size={18} />{t('新建文件夹')}</button><button className="button primary" disabled={readOnly} onClick={() => fileInput.current?.click()}><Icon name="upload" size={18} />{t('上传文件')}</button></div>}
+            <button className={`icon-button ${loading ? 'is-loading' : ''}`} aria-label={t('刷新文件列表')} onClick={() => setRefresh(value => value + 1)}><Icon name="refresh" size={17} /></button>
+          </div>
           <div className="toolbar"><div className="selection-actions">{actions.map(action => <button key={action.label} className={`toolbar-button ${action.danger ? 'danger-text' : ''}`} disabled={action.disabled} onClick={action.run} title={t(action.label)}><Icon name={action.icon} size={17} /><span>{t(action.label)}</span></button>)}{clipboard && !view.trash && <button className="toolbar-button" disabled={readOnly} onClick={() => { void paste(); }}><Icon name="copy" size={17} /><span>{t('粘贴')}</span></button>}</div><div className="list-tools"><button className="button advanced-settings-entry" disabled={settingsBusy} onClick={async () => { setContextMenu(null); try { const data = await request<FileSettings>('settings/files'); setFileSettings(data); setModal({ kind: 'advanced' }); } catch (error) { notify(error instanceof Error ? error.message : '读取高级设置失败', true); } }}><Icon name="menu" size={16} />{t('高级设置')}</button><label className="filter-field"><Icon name="search" size={16} /><input ref={filterInput} aria-label={t('筛选当前目录')} placeholder={t('筛选当前目录…')} value={filter} onChange={event => setFilter(event.target.value)} />{filter && <button aria-label={t('清除筛选')} onClick={() => setFilter('')}><Icon name="close" size={13} /></button>}</label><div className="view-switch" role="group" aria-label={t('文件视图')}><button aria-label={t('列表视图')} aria-pressed={layout === 'list'} onClick={() => setLayout('list')}><Icon name="list" size={17} /></button><button aria-label={t('网格视图')} aria-pressed={layout === 'grid'} onClick={() => setLayout('grid')}><Icon name="grid" size={17} /></button></div></div></div>
           <div className="file-area" tabIndex={0} aria-label={t('文件选择区域')} onClick={event => { if (event.target === event.currentTarget) setSelected(new Set()); }} onContextMenu={event => { if (event.target === event.currentTarget) { event.preventDefault(); setContextMenu({ x: Math.min(event.clientX, window.innerWidth - 210), y: Math.min(event.clientY, window.innerHeight - 310) }); } }}>
             {loading ? <div className="loading-state" role="status"><span className="spinner" />{t('正在读取文件…')}</div> : listError ? <div className="empty-state" role="alert"><div className="empty-icon error-icon"><Icon name="warning" size={36} /></div><h3>{t('暂时无法读取目录')}</h3><p>{t(listError)}</p><button className="button" onClick={() => setRefresh(value => value + 1)}><Icon name="refresh" size={16} />{t('重新加载')}</button><button className="button" onClick={() => setModal({ kind: 'settings' })}><Icon name="settings" size={16} />{t('设置')}</button></div> : !shares.length ? <div className="empty-state"><div className="empty-icon"><Icon name="server" size={42} /></div><h3>{t('尚未添加共享目录')}</h3><p>{t('首次使用不预设共享或主目录。请打开「设置 → 共享设置」，手动添加服务账号可访问的目录；Docker 挂载到 /mnt 等位置的目录也需要手动添加。')}</p><button className="button primary" onClick={() => setModal({ kind: 'settings' })}><Icon name="settings" size={17} />{t('打开设置')}</button></div> : visible.length === 0 ? <div className="empty-state"><div className="empty-icon"><Icon name={filter ? 'search' : view.trash ? 'trash' : 'folder'} size={44} /></div><h3>{t(filter ? '没有匹配的文件' : view.trash ? '回收站是空的' : '给这里添一些内容')}</h3><p>{t(filter ? '试试其他名称，筛选仅在当前目录中进行。' : view.trash ? '移至回收站的文件会显示在这里。' : readOnly ? '此共享目录目前没有文件。' : '拖放文件到这里，或使用上方按钮上传。')}</p>{filter ? <button className="button" onClick={() => setFilter('')}>{t('清除筛选')}</button> : !view.trash && !readOnly && <button className="button primary" onClick={() => fileInput.current?.click()}><Icon name="upload" size={17} />{t('上传文件')}</button>}</div> : <>
