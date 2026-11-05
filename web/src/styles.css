@@ -47,6 +47,19 @@
 @media(min-width:921px){.toolbar{flex-wrap:wrap}.list-tools{margin-left:auto}}
 @media(max-width:680px){.list-tools{flex-wrap:wrap}.filter-field{min-width:0}}
 
+.path-location{display:flex;align-items:center;flex:1;min-width:0}
+.path-location .breadcrumbs{min-height:calc(var(--button-compact-height) + 2px);border:1px solid var(--border);border-radius:7px}
+.path-location .breadcrumbs>button,.path-location .breadcrumbs>span{flex-shrink:0}
+.path-location .breadcrumbs>span:last-of-type button{font-weight:550;color:#425873}
+.path-location .breadcrumbs:has(>.path-edit-trigger):hover,.path-location .breadcrumbs:focus-within{border-color:var(--blue)}
+.path-location .breadcrumbs>.path-edit-trigger{flex:1 0 44px;min-width:44px;align-self:stretch;height:auto;padding:0;border-radius:0;background:transparent;cursor:text}
+.path-location .breadcrumbs>.path-edit-trigger:hover{background:transparent}
+.path-location .breadcrumbs button:focus-visible{outline-offset:-3px}
+.path-editor{display:flex;align-items:center;gap:7px;flex:1;min-width:0}
+.path-editor .text-input{flex:1;width:0;min-width:0;height:var(--button-compact-height);min-height:var(--button-compact-height);padding:0 9px}
+.path-editor .button{flex-shrink:0}
+.path-bar:has(.path-editor){height:auto;min-height:56px;flex-wrap:wrap;padding-top:8px;padding-bottom:8px}
+.path-bar:has(.path-editor)>.path-location{flex-basis:260px}
 .path-bar>.readonly-badge{flex-shrink:0;white-space:nowrap}
 .path-bar>.trash-share-select{width:auto;max-width:220px;min-width:0;height:var(--button-compact-height);min-height:var(--button-compact-height);padding-top:0;padding-bottom:0;font-size:var(--button-font-size)}
 .path-actions{display:flex;align-items:center;gap:8px;flex-shrink:0}
@@ -54,7 +67,8 @@
 @media(max-width:680px){
   .file-main{padding:8px}
   .path-bar{height:auto;min-height:49px;flex-wrap:wrap;padding-top:8px;padding-bottom:8px}
-  .path-bar>.breadcrumbs{flex-basis:calc(100% - 115px)}
+  .path-bar>.path-location{flex-basis:calc(100% - 123px)}
+  .path-bar:has(.path-editor)>.path-location{order:1;flex-basis:100%}
   .path-bar>.readonly-badge,.path-bar>.trash-share-select{order:1}
   .path-bar>.trash-share-select{width:100%;max-width:none;margin-top:4px}
   .path-actions{order:1;width:100%;margin-top:4px}
