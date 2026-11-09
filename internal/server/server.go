@@ -57,6 +57,7 @@ type Server struct {
 	password           [32]byte
 	mux                *http.ServeMux
 	mutation           sync.Mutex
+	generalMu          sync.Mutex
 	sharesMu           sync.RWMutex
 	shares             []Share
 	tasksMu            sync.Mutex

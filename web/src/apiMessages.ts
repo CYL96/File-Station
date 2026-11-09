@@ -35,6 +35,7 @@ export const apiMessages: Record<string, string> = {
 
   '通用设置格式错误': 'Invalid general settings format',
   '已保存的通用设置无效': 'The saved general settings are invalid',
+  '回收站设置已更改，请重新确认删除方式': 'The trash bin setting has changed. Please confirm the deletion mode again.',
 
   '创建更新检查请求失败': 'Failed to create the update check request',
   '检查更新超时，请稍后重试': 'The update check timed out. Please try again later.',

@@ -370,3 +370,303 @@ func TestOperationPersistsRetryParametersAtomically(t *testing.T) {
 		t.Fatalf("failed persistence moved source: %q %v", data, err)
 	}
 }
+
+func (f *taskRetryFixture) setRecycleBin(enabled bool) {
+	f.t.Helper()
+	f.request("POST", "/api/settings/general/save", map[string]any{"dateFormat": "locale", "permissionFormat": "octal", "recycleBinEnabled": enabled}, http.StatusOK)
+}
+
+func TestDeletionModeRequiresMatchingConfirmation(t *testing.T) {
+	f := newTaskRetryFixture(t)
+	f.write("source.txt", "source")
+	body := operationBody{Kind: "delete", Share: "files", Paths: []string{"source.txt"}}
+	f.request("POST", "/api/operation", body, http.StatusConflict)
+	// Old stored documents enable trash without needing a migration.
+	if _, err := f.app.db.Exec("INSERT INTO settings_meta(key,value) VALUES('general',?)", `{"dateFormat":"locale","permissionFormat":"octal"}`); err != nil {
+		t.Fatal(err)
+	}
+	f.request("POST", "/api/operation", body, http.StatusConflict)
+	f.setRecycleBin(false)
+	body.Kind = "trash"
+	f.request("POST", "/api/operation", body, http.StatusConflict)
+	f.setRecycleBin(true)
+	body.Kind = "delete"
+	f.request("POST", "/api/operation", body, http.StatusConflict)
+	var count int
+	if err := f.app.db.QueryRow("SELECT (SELECT count(*) FROM tasks)+(SELECT count(*) FROM task_operations)+(SELECT count(*) FROM trash)").Scan(&count); err != nil || count != 0 {
+		t.Fatalf("rejected confirmation changed state: count=%d err=%v", count, err)
+	}
+	if data, err := os.ReadFile(filepath.Join(f.files, "source.txt")); err != nil || string(data) != "source" {
+		t.Fatalf("rejected confirmation deleted source: %q %v", data, err)
+	}
+}
+
+func TestDeletionSettingsReadFailuresNeverChoosePermanentDeletion(t *testing.T) {
+	f := newTaskRetryFixture(t)
+	f.write("source.txt", "source")
+	f.setRecycleBin(false)
+	if _, err := f.app.db.Exec("UPDATE settings_meta SET value=? WHERE key='general'", `{"dateFormat":"locale","recycleBinEnabled":null}`); err != nil {
+		t.Fatal(err)
+	}
+	for _, kind := range []string{"trash", "delete"} {
+		f.request("POST", "/api/operation", operationBody{Kind: kind, Share: "files", Paths: []string{"source.txt"}}, http.StatusInternalServerError)
+	}
+	if _, err := f.app.db.Exec("ALTER TABLE settings_meta RENAME TO unreadable_settings_meta"); err != nil {
+		t.Fatal(err)
+	}
+	for _, kind := range []string{"trash", "delete"} {
+		f.request("POST", "/api/operation", operationBody{Kind: kind, Share: "files", Paths: []string{"source.txt"}}, http.StatusInternalServerError)
+	}
+	var count int
+	if err := f.app.db.QueryRow("SELECT count(*) FROM tasks").Scan(&count); err != nil || count != 0 {
+		t.Fatalf("settings read failure created a task: count=%d err=%v", count, err)
+	}
+	if data, err := os.ReadFile(filepath.Join(f.files, "source.txt")); err != nil || string(data) != "source" {
+		t.Fatalf("settings read failure deleted source: %q %v", data, err)
+	}
+}
+
+func TestDisabledRecycleBinKeepsHistoricalTrashAccessible(t *testing.T) {
+	f := newTaskRetryFixture(t)
+	f.write("restore.txt", "restore me")
+	f.write("purge.txt", "purge me")
+	id := f.start("/api/operation", operationBody{Kind: "trash", Share: "files", Paths: []string{"restore.txt", "purge.txt"}})
+	f.app.workers.Wait()
+	if got := f.task(id); got.Status != "done" {
+		t.Fatalf("populate trash: %+v", got)
+	}
+	f.setRecycleBin(false)
+	f.app.Close()
+	f.open()
+	var entries []TrashEntry
+	if err := json.Unmarshal(f.request("GET", "/api/trash?share=files", nil, http.StatusOK), &entries); err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("historical trash hidden: %+v", entries)
+	}
+	for _, entry := range entries {
+		if entry.Path == "restore.txt" {
+			f.request("POST", "/api/trash/restore", trashBody{Share: "files", ID: entry.ID}, http.StatusOK)
+		} else if entry.Path == "purge.txt" {
+			f.request("POST", "/api/trash/delete", trashBody{Share: "files", ID: entry.ID}, http.StatusOK)
+		} else {
+			t.Fatalf("unexpected trash item: %+v", entry)
+		}
+	}
+	if data, err := os.ReadFile(filepath.Join(f.files, "restore.txt")); err != nil || string(data) != "restore me" {
+		t.Fatalf("historical restoration: %q %v", data, err)
+	}
+	if _, err := os.Stat(filepath.Join(f.files, "purge.txt")); !os.IsNotExist(err) {
+		t.Fatalf("purged historical file exists: %v", err)
+	}
+	if err := json.Unmarshal(f.request("GET", "/api/trash?share=files", nil, http.StatusOK), &entries); err != nil || len(entries) != 0 {
+		t.Fatalf("historical trash not cleared: %+v %v", entries, err)
+	}
+}
+
+func TestPermanentDeletionUsesTaskAndPreservesShareBoundary(t *testing.T) {
+	f := newTaskRetryFixture(t)
+	f.setRecycleBin(false)
+	f.write("source.txt", "source")
+	if err := os.Mkdir(filepath.Join(f.files, "folder"), 0750); err != nil {
+		t.Fatal(err)
+	}
+	f.write("folder/nested.txt", "nested")
+	outside := filepath.Join(f.base, "outside.txt")
+	if err := os.WriteFile(outside, []byte("outside"), 0640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(f.files, "link")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(f.files, "folder", "nested-link")); err != nil {
+		t.Fatal(err)
+	}
+	id := f.start("/api/operation", operationBody{Kind: "delete", Share: "files", Paths: []string{"source.txt", "folder", "link"}})
+	f.app.workers.Wait()
+	if got := f.task(id); got.Kind != "delete" || got.Status != "done" || got.Completed != 3 || got.Total != 3 || got.CanRetry {
+		t.Fatalf("permanent deletion task: %+v", got)
+	}
+	for _, name := range []string{"source.txt", "folder", "link", ".webui-trash"} {
+		if _, err := os.Lstat(filepath.Join(f.files, name)); !os.IsNotExist(err) {
+			t.Fatalf("permanent deletion left %s: %v", name, err)
+		}
+	}
+	if data, err := os.ReadFile(outside); err != nil || string(data) != "outside" {
+		t.Fatalf("permanent deletion followed symlink: %q %v", data, err)
+	}
+	var count int
+	if err := f.app.db.QueryRow("SELECT count(*) FROM trash").Scan(&count); err != nil || count != 0 {
+		t.Fatalf("permanent deletion created trash metadata: count=%d err=%v", count, err)
+	}
+}
+
+func TestAcceptedDeletionTasksRetainModeAfterSettingChanges(t *testing.T) {
+	for _, kind := range []string{"trash", "delete"} {
+		t.Run(kind, func(t *testing.T) {
+			f := newTaskRetryFixture(t)
+			f.setRecycleBin(kind == "trash")
+			f.write("source.txt", "source")
+			f.app.mutation.Lock()
+			locked := true
+			defer func() {
+				if locked {
+					f.app.mutation.Unlock()
+				}
+			}()
+			id := f.start("/api/operation", operationBody{Kind: kind, Share: "files", Paths: []string{"source.txt"}})
+			f.setRecycleBin(kind != "trash")
+			f.app.mutation.Unlock()
+			locked = false
+			f.app.workers.Wait()
+			if got := f.task(id); got.Kind != kind || got.Status != "done" || got.Completed != 1 {
+				t.Fatalf("accepted task changed mode: %+v", got)
+			}
+			var count int
+			if err := f.app.db.QueryRow("SELECT count(*) FROM trash").Scan(&count); err != nil {
+				t.Fatal(err)
+			}
+			if (count == 1) != (kind == "trash") {
+				t.Fatalf("accepted %s task produced %d trash entries", kind, count)
+			}
+			if _, err := os.Stat(filepath.Join(f.files, "source.txt")); !os.IsNotExist(err) {
+				t.Fatalf("accepted deletion kept source: %v", err)
+			}
+		})
+	}
+}
+
+func TestDeletionRetriesRetainModeAndCompletedPrefixAfterRestart(t *testing.T) {
+	for _, kind := range []string{"trash", "delete"} {
+		t.Run(kind, func(t *testing.T) {
+			f := newTaskRetryFixture(t)
+			f.setRecycleBin(kind == "trash")
+			f.write("first.txt", "first")
+			if err := os.Mkdir(filepath.Join(f.files, "source"), 0750); err != nil {
+				t.Fatal(err)
+			}
+			f.write("source/second.txt", "second")
+			outside := filepath.Join(f.base, "outside")
+			if err := os.Mkdir(outside, 0750); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(outside, "second.txt"), []byte("outside"), 0640); err != nil {
+				t.Fatal(err)
+			}
+			f.app.mutation.Lock()
+			locked := true
+			defer func() {
+				if locked {
+					f.app.mutation.Unlock()
+				}
+			}()
+			id := f.start("/api/operation", operationBody{Kind: kind, Share: "files", Paths: []string{"first.txt", "source/second.txt"}})
+			if err := os.Rename(filepath.Join(f.files, "source"), filepath.Join(f.files, "parked")); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(outside, filepath.Join(f.files, "source")); err != nil {
+				t.Fatal(err)
+			}
+			f.app.mutation.Unlock()
+			locked = false
+			f.app.workers.Wait()
+			failed := f.task(id)
+			if failed.Kind != kind || failed.Status != "error" || failed.Completed != 1 || !failed.CanRetry {
+				t.Fatalf("failed deletion: %+v", failed)
+			}
+			if data, err := os.ReadFile(filepath.Join(outside, "second.txt")); err != nil || string(data) != "outside" {
+				t.Fatalf("deletion crossed share boundary: %q %v", data, err)
+			}
+			if err := os.Remove(filepath.Join(f.files, "source")); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Rename(filepath.Join(f.files, "parked"), filepath.Join(f.files, "source")); err != nil {
+				t.Fatal(err)
+			}
+			f.write("first.txt", "new file must survive retry")
+			f.setRecycleBin(kind != "trash")
+			f.app.Close()
+			f.open()
+			f.request("POST", "/api/settings/shares/save", map[string]any{"id": "files", "name": "Files", "path": f.files, "readOnly": true}, http.StatusOK)
+			f.request("POST", "/api/tasks/retry", map[string]string{"id": id}, http.StatusForbidden)
+			f.request("POST", "/api/settings/shares/save", map[string]any{"id": "files", "name": "Files", "path": f.files, "readOnly": false}, http.StatusOK)
+			retried := f.start("/api/tasks/retry", map[string]string{"id": id})
+			f.app.workers.Wait()
+			if got := f.task(retried); got.Kind != kind || got.Status != "done" || got.Total != 1 || got.Completed != 1 {
+				t.Fatalf("retry changed deletion mode: %+v", got)
+			}
+			if data, err := os.ReadFile(filepath.Join(f.files, "first.txt")); err != nil || string(data) != "new file must survive retry" {
+				t.Fatalf("retry repeated completed prefix: %q %v", data, err)
+			}
+			if _, err := os.Stat(filepath.Join(f.files, "source", "second.txt")); !os.IsNotExist(err) {
+				t.Fatalf("retry did not remove remaining source: %v", err)
+			}
+			var count int
+			if err := f.app.db.QueryRow("SELECT count(*) FROM trash").Scan(&count); err != nil {
+				t.Fatal(err)
+			}
+			want := 0
+			if kind == "trash" {
+				want = 2
+			}
+			if count != want {
+				t.Fatalf("retried %s produced %d trash entries, want %d", kind, count, want)
+			}
+			if got := f.task(id); !reflect.DeepEqual(got, failed) {
+				t.Fatalf("retry modified original history: %+v, want %+v", got, failed)
+			}
+		})
+	}
+}
+
+func TestPermanentDeletionRejectsProtectedPathsAndReadonlyShares(t *testing.T) {
+	f := newTaskRetryFixture(t)
+	f.setRecycleBin(false)
+	f.write("source.txt", "source")
+	for _, paths := range [][]string{{"."}, {"../outside"}, {".webui-trash"}, {"folder/.webui-private"}, {"source.txt", "source.txt"}, {"target", "target/child"}} {
+		want := http.StatusForbidden
+		if len(paths) == 2 {
+			want = http.StatusBadRequest
+		}
+		// Keep both parent and child present so rejection checks selection semantics.
+		if paths[0] == "target" {
+			f.write("target/child", "child")
+		}
+		f.request("POST", "/api/operation", operationBody{Kind: "delete", Share: "files", Paths: paths}, want)
+	}
+	f.request("POST", "/api/settings/shares/save", map[string]any{"id": "files", "name": "Files", "path": f.files, "readOnly": true}, http.StatusOK)
+	f.request("POST", "/api/operation", operationBody{Kind: "delete", Share: "files", Paths: []string{"source.txt"}}, http.StatusForbidden)
+	var count int
+	if err := f.app.db.QueryRow("SELECT count(*) FROM tasks").Scan(&count); err != nil || count != 0 {
+		t.Fatalf("rejected permanent deletion created task: count=%d err=%v", count, err)
+	}
+	if data, err := os.ReadFile(filepath.Join(f.files, "source.txt")); err != nil || string(data) != "source" {
+		t.Fatalf("rejected permanent deletion changed source: %q %v", data, err)
+	}
+}
+
+func TestQueuedPermanentDeletionCanBeCancelledAndLocksShareSettings(t *testing.T) {
+	f := newTaskRetryFixture(t)
+	f.setRecycleBin(false)
+	f.write("source.txt", "source")
+	f.app.mutation.Lock()
+	locked := true
+	defer func() {
+		if locked {
+			f.app.mutation.Unlock()
+		}
+	}()
+	id := f.start("/api/operation", operationBody{Kind: "delete", Share: "files", Paths: []string{"source.txt"}})
+	f.request("POST", "/api/settings/shares/save", map[string]any{"id": "files", "name": "Files", "path": f.files, "readOnly": true}, http.StatusConflict)
+	f.request("POST", "/api/tasks/cancel", map[string]string{"id": id}, http.StatusOK)
+	f.app.mutation.Unlock()
+	locked = false
+	f.app.workers.Wait()
+	if got := f.task(id); got.Kind != "delete" || got.Status != "cancelled" || got.Completed != 0 || got.CanRetry {
+		t.Fatalf("queued permanent deletion cancellation: %+v", got)
+	}
+	if data, err := os.ReadFile(filepath.Join(f.files, "source.txt")); err != nil || string(data) != "source" {
+		t.Fatalf("cancelled permanent deletion changed source: %q %v", data, err)
+	}
+}

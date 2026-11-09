@@ -45,6 +45,19 @@ func (s *Server) operation(w http.ResponseWriter, r *http.Request) error {
 	if err := decode(w, r, &b); err != nil {
 		return err
 	}
+	// Serialize the confirmation check and submission against setting changes.
+	// Retried tasks bypass this check and retain their persisted deletion mode.
+	s.generalMu.Lock()
+	defer s.generalMu.Unlock()
+	if b.Kind == "trash" || b.Kind == "delete" {
+		settings, err := s.loadGeneralSettings(r.Context())
+		if err != nil {
+			return err
+		}
+		if (b.Kind == "trash") != settings.RecycleBinEnabled {
+			return fail(http.StatusConflict, "回收站设置已更改，请重新确认删除方式")
+		}
+	}
 	id, err := s.startOperation(b)
 	if err != nil {
 		return err
@@ -94,7 +107,7 @@ func (s *Server) retryTask(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (s *Server) startOperation(b operationBody) (string, error) {
-	if b.Kind != "copy" && b.Kind != "move" && b.Kind != "trash" {
+	if b.Kind != "copy" && b.Kind != "move" && b.Kind != "trash" && b.Kind != "delete" {
 		return "", fail(400, "操作无效")
 	}
 	if len(b.Paths) == 0 || len(b.Paths) > 1000 {
@@ -109,7 +122,7 @@ func (s *Server) startOperation(b operationBody) (string, error) {
 	}
 	var dst *Share
 	destination := "."
-	if b.Kind != "trash" {
+	if b.Kind == "copy" || b.Kind == "move" {
 		if b.DestinationShare == "" {
 			b.DestinationShare = b.Share
 		}
@@ -213,9 +226,15 @@ func (s *Server) startOperation(b operationBody) (string, error) {
 				s.mutation.Unlock()
 				break
 			}
-			if b.Kind == "trash" {
+			switch b.Kind {
+			case "trash":
 				workErr = s.trashFile(src, p)
-			} else {
+			case "delete":
+				workErr = noLinks(src.root, path.Dir(p))
+				if workErr == nil {
+					workErr = src.root.RemoveAll(p)
+				}
+			default:
 				var skip bool
 				var target string
 				target, skip, workErr = available(dst.root, path.Join(destination, path.Base(p)), b.Conflict)
