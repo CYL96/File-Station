@@ -9,7 +9,7 @@ export type FileSort = { key: FileColumnKey; ascending: boolean };
 export type FileSettings = { showHidden: boolean; columns: { key: FileColumnKey; visible: boolean }[]; sort: FileSort };
 export type DateFormat = 'locale' | 'yyyy-MM-dd' | 'yyyy/MM/dd' | 'dd/MM/yyyy' | 'MM/dd/yyyy';
 export type PermissionFormat = 'octal' | 'symbolic';
-export type GeneralSettings = { dateFormat: DateFormat; permissionFormat: PermissionFormat };
+export type GeneralSettings = { dateFormat: DateFormat; permissionFormat: PermissionFormat; recycleBinEnabled: boolean };
 export type AboutData = { version: string; repositoryUrl: string };
 export type UpdateCheck = { currentVersion: string; latestVersion: string; status: 'update-available' | 'up-to-date' | 'unreleased' | 'unknown'; releaseUrl: string };
 export type FileMetadata = { extension: string; permissions: string; owner: string; group: string; created: string | null };
@@ -18,7 +18,7 @@ export type TrashEntry = FileMetadata & { id: string; path: string; deletedAt: s
 export type Task = { id: string; kind: string; status: 'running' | 'done' | 'error' | 'cancelled'; completed: number; total: number; canRetry: boolean; error?: string };
 export type Session = { username: string; csrf: string };
 export type Conflict = 'error' | 'skip' | 'replace' | 'keep';
-export type Operation = { kind: 'copy' | 'move' | 'trash'; share: string; paths: string[]; destinationShare?: string; destination?: string; conflict: Conflict };
+export type Operation = { kind: 'copy' | 'move' | 'trash' | 'delete'; share: string; paths: string[]; destinationShare?: string; destination?: string; conflict: Conflict };
 
 export class ApiError extends Error {
   constructor(message: string, public status: number) { super(message); }

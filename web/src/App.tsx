@@ -22,11 +22,11 @@ import { useSidebarResize } from './useSidebarResize';
 
 type Item = Entry & { trashId?: string; deletedAt?: string };
 type View = { share: string; path: string; trash: boolean };
-type ModalState = { kind: 'mkdir' } | { kind: 'rename'; entry: Item } | { kind: 'destination'; operation: Operation } | { kind: 'delete'; items: Item[]; permanent: boolean } | { kind: 'preview'; entry: Item } | { kind: 'edit'; share: string; entry: Item } | { kind: 'help' } | { kind: 'settings' } | { kind: 'advanced' } | { kind: 'about' };
+type ModalState = { kind: 'mkdir' } | { kind: 'rename'; entry: Item } | { kind: 'destination'; operation: Operation } | { kind: 'delete'; share: string; items: Item[]; trash: boolean; permanent: boolean } | { kind: 'preview'; entry: Item } | { kind: 'edit'; share: string; entry: Item } | { kind: 'help' } | { kind: 'settings' } | { kind: 'advanced' } | { kind: 'about' };
 type UploadTask = { id: string; name: string; size: number; loaded: number; status: 'queued' | 'running' | 'done' | 'error' | 'cancelled' | 'skipped'; error?: string; controller: AbortController };
 type UploadSource = { file: File; share: string; path: string; conflict: Conflict };
 type ConflictPrompt = { title: string; description: string; resolve: (policy: Conflict | null) => void };
-const taskLabels: Record<string, string> = { copy: '复制', move: '移动', trash: '移至回收站' };
+const taskLabels: Record<string, string> = { copy: '复制', move: '移动', trash: '移至回收站', delete: '永久删除' };
 const statuses: Record<string, string> = { queued: '等待上传', running: '正在处理', done: '已完成', error: '失败', cancelled: '已取消', skipped: '已跳过' };
 const columnWidths: Record<FileColumnKey, number> = { name: 145, size: 80, modified: 150, type: 110, extension: 90, permissions: 90, owner: 110, group: 110, created: 150 };
 // Upload IDs are page-local UI keys, not security tokens.
@@ -293,21 +293,25 @@ export default function App() {
   const running = tasks.filter(task => task.status === 'running').length + uploads.filter(task => task.status === 'running' || task.status === 'queued').length;
   const completedTasks = tasks.filter(task => task.status === 'done').length + uploads.filter(task => task.status === 'done').length;
   const failedTasks = tasks.filter(task => task.status === 'error').length + uploads.filter(task => task.status === 'error').length;
+  const clearableTasks = tasks.length + uploads.length - running;
 
-  async function clearSuccessfulTasks() {
-    if (clearingTasks || completedTasks === 0) return;
+  async function clearTasks(all = false) {
+    if (clearingTasks || (all ? clearableTasks : completedTasks) === 0) return;
     const epoch = authEpoch.current;
-    const taskIds = tasks.filter(task => task.status === 'done').map(task => task.id);
-    const uploadIds = new Set(uploads.filter(task => task.status === 'done').map(task => task.id));
+    const taskIds = tasks.filter(task => all ? task.status !== 'running' : task.status === 'done').map(task => task.id);
+    const uploadIds = new Set(uploads.filter(task => all ? task.status !== 'running' && task.status !== 'queued' : task.status === 'done').map(task => task.id));
     setClearingTasks(true);
     try {
-      await request('tasks/clear', { ids: taskIds });
+      await request('tasks/clear', all ? { all: true } : { ids: taskIds });
       if (epoch !== authEpoch.current) return;
       const clearedIds = new Set(taskIds);
       setTasks(current => current.filter(task => !clearedIds.has(task.id)));
-      setUploads(current => current.filter(task => !uploadIds.has(task.id)));
+      setUploads(current => current.filter(task => !uploadIds.has(task.id) || task.status === 'running' || task.status === 'queued'));
       for (const id of taskIds) previousTasks.current.delete(id);
-      notify('已清除成功任务');
+      for (const id of uploadIds) {
+        if (!enqueuedUploads.current.has(id)) uploadSources.current.delete(id);
+      }
+      notify(all ? '已清除全部终态任务' : '已清除成功任务');
     } catch (error) {
       if (epoch === authEpoch.current) notify(error instanceof Error ? error.message : '清除失败', true);
     } finally {
@@ -450,7 +454,7 @@ export default function App() {
       setDrawer(true);
     };
     try {
-      if (task.kind === 'trash') await submit();
+      if (task.kind === 'trash' || task.kind === 'delete') await submit();
       else {
         const policy = await askConflict('选择重试时的同名文件处理方式', task.error ?? '将仅重试未完成的项目；已完成的项目不会撤销或重复执行。');
         if (!policy || epoch !== authEpoch.current) return;
@@ -469,8 +473,27 @@ export default function App() {
     if (!picked.length || view.trash || (kind === 'move' && readOnly)) return;
     setModal({ kind: 'destination', operation: { kind, share: view.share, paths: picked.map(item => item.path), conflict: 'error' } });
   }
-  function deleteSelection(permanent = false) {
-    if (picked.length && !readOnly) setModal({ kind: 'delete', items: picked, permanent: view.trash || permanent });
+  async function deleteSelection() {
+    if (!picked.length || readOnly || actionBusy) return;
+    const epoch = authEpoch.current;
+    const currentView = view;
+    const items = picked;
+    if (currentView.trash) {
+      setModal({ kind: 'delete', share: currentView.share, items, trash: true, permanent: true });
+      return;
+    }
+    setActionBusy(true);
+    try {
+      const settings = await request<GeneralSettings>('settings/general');
+      if (epoch !== authEpoch.current) return;
+      setGeneralSettings(settings); setGeneralError('');
+      if (viewRef.current.share !== currentView.share || viewRef.current.path !== currentView.path || viewRef.current.trash) return;
+      setModal({ kind: 'delete', share: currentView.share, items, trash: false, permanent: !settings.recycleBinEnabled });
+    } catch (error) {
+      if (epoch === authEpoch.current) notify(error instanceof Error ? error.message : '读取通用设置失败', true);
+    } finally {
+      if (epoch === authEpoch.current) setActionBusy(false);
+    }
   }
   function downloadSelected() {
     for (const entry of picked.filter(item => !item.isDir && !item.isSymlink)) {
@@ -600,7 +623,7 @@ export default function App() {
     { label: '复制到', icon: 'copy', disabled: !picked.length || !shares.some(item => !item.readOnly), run: () => destination('copy') },
     { label: '移动到', icon: 'move', disabled: !picked.length || readOnly, run: () => destination('move') },
     { label: '重命名', icon: 'edit', disabled: !single || readOnly, run: () => { if (single) setModal({ kind: 'rename', entry: single }); } },
-    { label: '删除', icon: 'trash', disabled: !picked.length || readOnly, run: () => deleteSelection(), danger: true },
+    { label: '删除', icon: 'trash', disabled: !picked.length || readOnly || actionBusy, run: () => { void deleteSelection(); }, danger: true },
   ];
   if (picked.length) actions.push({ label: '计算大小', icon: 'server', disabled: false, run: () => { setSizeSelection({ share: view.share, trash: view.trash, items: picked.map(entry => ({ path: entry.trashId ?? entry.path, name: entry.name })) }); } });
   return <div className="desktop">
@@ -653,7 +676,10 @@ export default function App() {
       <button className="drawer-backdrop" aria-label={t('关闭任务中心')} onClick={() => setDrawer(false)} />
       <aside className="task-drawer" aria-label={t('任务中心')}>
         <header className="drawer-header">
-          <button className="button clear-successful-tasks" disabled={clearingTasks || completedTasks === 0} onClick={() => { void clearSuccessfulTasks(); }}><Icon name="trash" size={15} />{t(clearingTasks ? '正在清除…' : '一键清除已成功')}</button>
+          <div className="task-clear-actions">
+            <button className="button clear-tasks" disabled={clearingTasks || completedTasks === 0} onClick={() => { void clearTasks(); }}><Icon name="trash" size={15} />{t(clearingTasks ? '正在清除…' : '清除成功')}</button>
+            <button className="button clear-tasks" disabled={clearingTasks || clearableTasks === 0} onClick={() => { void clearTasks(true); }}><Icon name="trash" size={15} />{t(clearingTasks ? '正在清除…' : '清除全部')}</button>
+          </div>
           <button className="icon-button" aria-label={t('关闭任务中心')} onClick={() => setDrawer(false)}><Icon name="close" /></button>
         </header>
         <dl className="task-statistics" aria-label={t('任务统计')} aria-live="polite">
@@ -676,7 +702,7 @@ export default function App() {
     {modal?.kind === 'mkdir' && !conflict && <NameDialog title={t('新建文件夹')} label="文件夹名称" initialName="" onClose={() => setModal(null)} onSubmit={async name => { await request('mkdir', { share: view.share, path: view.path, name }); setModal(null); setRefresh(value => value + 1); notify('文件夹已创建'); }} />}
     {modal?.kind === 'rename' && !conflict && <NameDialog title={t('重命名')} label="新名称" initialName={modal.entry.name} onClose={() => setModal(null)} onSubmit={async name => { const entry = modal.entry; setModal(null); try { if (await withConflict(policy => request('rename', { share: view.share, path: entry.path, name, conflict: policy }), `重命名为「${name}」时发生冲突`)) { setRefresh(value => value + 1); notify('重命名已处理'); } } catch (error) { notify(error instanceof Error ? error.message : '重命名失败', true); } }} />}
     {modal?.kind === 'destination' && !conflict && <DestinationDialog shares={shares} initialShare={view.share} initialPath={view.path} count={modal.operation.paths.length} kind={modal.operation.kind as 'copy' | 'move'} onClose={() => setModal(null)} onConfirm={async (destinationShare, destinationPath) => { const operation = modal.operation; setModal(null); try { await startOperation({ ...operation, destinationShare, destination: destinationPath }); } catch (error) { notify(error instanceof Error ? error.message : '操作失败', true); } }} />}
-    {modal?.kind === 'delete' && !conflict && <Modal title={t(modal.permanent ? '永久删除文件' : '移至回收站')} onClose={() => { if (!actionBusy) setModal(null); }}><div className="modal-body"><div className={`delete-illustration ${modal.permanent ? 'permanent' : ''}`}><Icon name="trash" size={30} /></div><h3 className="confirm-title">{t(modal.permanent ? '永久删除 {count} 个项目？' : '将 {count} 个项目移至回收站？', { count: modal.items.length })}</h3><p className="confirm-description">{t(modal.permanent ? '此操作不可撤销，文件与文件夹中的所有内容将永久删除。' : '文件将从当前位置移除，您可以稍后在回收站恢复。')}</p><ul className="delete-items">{modal.items.slice(0, 5).map(item => <li key={item.trashId ?? item.path}><Icon name={fileIcon(item)} size={16} /><span>{item.name}</span></li>)}{modal.items.length > 5 && <li>{t('以及其他 {count} 个项目', { count: modal.items.length - 5 })}</li>}</ul></div><footer className="modal-actions"><button className="button" disabled={actionBusy} onClick={() => setModal(null)}>{t('取消')}</button><button className={`button ${modal.permanent ? 'danger' : 'primary'}`} disabled={actionBusy} onClick={async () => { setActionBusy(true); try { if (modal.permanent) { for (const item of modal.items) await request('trash/delete', { share: view.share, id: item.trashId }); setRefresh(value => value + 1); notify('所选项目已永久删除'); } else await runOperation({ kind: 'trash', share: view.share, paths: modal.items.map(item => item.path), conflict: 'error' }); setModal(null); } catch (error) { notify(error instanceof Error ? error.message : '删除失败', true); setRefresh(value => value + 1); setModal(null); } finally { setActionBusy(false); } }}>{t(actionBusy ? '处理中…' : modal.permanent ? '永久删除' : '移至回收站')}</button></footer></Modal>}
+    {modal?.kind === 'delete' && !conflict && <Modal title={t(modal.permanent ? '永久删除文件' : '移至回收站')} onClose={() => { if (!actionBusy) setModal(null); }}><div className="modal-body"><div className={`delete-illustration ${modal.permanent ? 'permanent' : ''}`}><Icon name="trash" size={30} /></div><h3 className="confirm-title">{t(modal.permanent ? '永久删除 {count} 个项目？' : '将 {count} 个项目移至回收站？', { count: modal.items.length })}</h3><p className="confirm-description">{t(modal.permanent ? '此操作不可撤销，文件与文件夹中的所有内容将永久删除。' : '文件将从当前位置移除，您可以稍后在回收站恢复。')}</p><ul className="delete-items">{modal.items.slice(0, 5).map(item => <li key={item.trashId ?? item.path}><Icon name={fileIcon(item)} size={16} /><span>{item.name}</span></li>)}{modal.items.length > 5 && <li>{t('以及其他 {count} 个项目', { count: modal.items.length - 5 })}</li>}</ul></div><footer className="modal-actions"><button className="button" disabled={actionBusy} onClick={() => setModal(null)}>{t('取消')}</button><button className={`button ${modal.permanent ? 'danger' : 'primary'}`} disabled={actionBusy} onClick={async () => { setActionBusy(true); try { if (modal.trash) { for (const item of modal.items) await request('trash/delete', { share: modal.share, id: item.trashId }); setRefresh(value => value + 1); notify('所选项目已永久删除'); } else await runOperation({ kind: modal.permanent ? 'delete' : 'trash', share: modal.share, paths: modal.items.map(item => item.path), conflict: 'error' }); setModal(null); } catch (error) { notify(error instanceof Error ? error.message : '删除失败', true); setRefresh(value => value + 1); setModal(null); } finally { setActionBusy(false); } }}>{t(actionBusy ? '处理中…' : modal.permanent ? '永久删除' : '移至回收站')}</button></footer></Modal>}
     {modal?.kind === 'preview' && !conflict && <Preview key={view.share} share={view.share} entry={modal.entry} previous={previewIndex > 0 ? previewImages[previewIndex - 1] : undefined} next={previewIndex >= 0 ? previewImages[previewIndex + 1] : undefined} imagePosition={previewIndex >= 0 ? { index: previewIndex + 1, total: previewImages.length } : undefined} onNavigate={entry => setModal({ kind: 'preview', entry })} dateFormat={generalSettings.dateFormat} onClose={() => setModal(null)} onEdit={!readOnly && !view.trash && !modal.entry.isDir && !modal.entry.isSymlink ? () => setModal({ kind: 'edit', share: view.share, entry: modal.entry }) : undefined} />}
     {modal?.kind === 'help' && !conflict && <Modal title={t('键盘快捷键')} onClose={() => setModal(null)}><div className="modal-body"><p className="muted">{t('在文件区域中使用。输入文字或打开对话框时不会触发。列标题获得焦点时，Alt + 左右键用于调整列顺序，不会后退或前进。')}</p><dl className="shortcuts">{[['选择全部', 'Ctrl / ⌘ + A'], ['筛选当前目录', 'Ctrl / ⌘ + F'], ['复制 / 剪切', 'Ctrl / ⌘ + C / X'], ['粘贴到当前目录', 'Ctrl / ⌘ + V'], ['重命名', 'F2'], ['移至回收站 / 永久删除', 'Delete'], ['打开所选项目', 'Enter'], ['后退', 'Alt + ←'], ['前进', 'Alt + →'], ['上一级目录', 'Alt + ↑'], ['清除选择 / 关闭任务中心', 'Esc'], ['连续选择', 'Shift + 点击'], ['多选', 'Ctrl / ⌘ + 点击']].map(([label, key]) => <div key={label}><dt>{t(label)}</dt><dd><kbd>{t(key)}</kbd></dd></div>)}</dl></div><footer className="modal-actions"><button className="button primary" onClick={() => setModal(null)}>{t('知道了')}</button></footer></Modal>}
     {conflict && <Modal title={t(conflict.title)} onClose={() => conflict.resolve(null)}><div className="modal-body"><div className="conflict-heading"><Icon name="warning" size={25} /><p>{t(conflict.description)}</p></div><p className="muted">{t('文件不会自动覆盖，请选择处理方式：')}</p><div className="conflict-options"><button onClick={() => conflict.resolve('skip')}><Icon name="chevron" /><span><strong>{t('跳过同名项目')}</strong><small>{t('保留目标中的文件，继续处理其他项目')}</small></span></button><button onClick={() => conflict.resolve('keep')}><Icon name="copy" /><span><strong>{t('保留两者')}</strong><small>{t('为新文件自动添加序号，保留原有文件')}</small></span></button><button className="replace-option" onClick={() => conflict.resolve('replace')}><Icon name="warning" /><span><strong>{t('替换目标项目')}</strong><small>{t('覆盖目标中的同名内容，此操作不可撤销')}</small></span></button></div></div><footer className="modal-actions"><button className="button" onClick={() => conflict.resolve(null)}>{t('取消此次操作')}</button></footer></Modal>}

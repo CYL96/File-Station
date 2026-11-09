@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/cookiejar"
@@ -281,4 +282,90 @@ func TestClearTasksOnlyDeletesRequestedSuccessfulTasks(t *testing.T) {
 	assertTasks(want)
 	clear([]string{})
 	assertTasks(want)
+}
+
+func TestClearAllTasksDeletesTerminalHistoryBeyondVisibleLimit(t *testing.T) {
+	f := newTaskRetryFixture(t)
+	statuses := []string{"done", "error", "cancelled"}
+	for i := range 105 {
+		id := fmt.Sprintf("terminal-%03d", i)
+		if err := f.app.saveTask(&Task{ID: id, Kind: "copy", Status: statuses[i%len(statuses)], Total: 1}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.app.db.Exec("INSERT INTO task_operations(id,body) VALUES(?,?)", id, `{"kind":"copy","paths":["source.txt"]}`); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cancelled := false
+	running := &Task{ID: "running", Kind: "copy", Status: "running", Total: 2, Completed: 1, cancel: func() { cancelled = true }}
+	if err := f.app.saveTask(running); err != nil {
+		t.Fatal(err)
+	}
+	const runningBody = `{"kind":"copy","paths":["first.txt","second.txt"]}`
+	if _, err := f.app.db.Exec("INSERT INTO task_operations(id,body) VALUES(?,?)", running.ID, runningBody); err != nil {
+		t.Fatal(err)
+	}
+	f.app.tasks[running.ID] = running
+	var visible []Task
+	if err := json.Unmarshal(f.request("GET", "/api/tasks", nil, 200), &visible); err != nil {
+		t.Fatal(err)
+	}
+	if len(visible) != 100 {
+		t.Fatalf("visible tasks: got %d, wanted 100", len(visible))
+	}
+	for _, task := range visible {
+		if task.ID == "terminal-000" {
+			t.Fatal("oldest terminal task should be outside the visible history")
+		}
+	}
+	var response struct {
+		OK bool `json:"ok"`
+	}
+	if err := json.Unmarshal(f.request("POST", "/api/tasks/clear", map[string]any{"all": true}, 200), &response); err != nil {
+		t.Fatal(err)
+	}
+	if !response.OK {
+		t.Fatal("clear all did not acknowledge success")
+	}
+	for _, table := range []string{"tasks", "task_operations"} {
+		var count int
+		if err := f.app.db.QueryRow("SELECT count(*) FROM " + table).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		if count != 1 {
+			t.Fatalf("%s retained %d rows, wanted only the running task", table, count)
+		}
+	}
+	var status, body string
+	var completed, total int
+	if err := f.app.db.QueryRow("SELECT tasks.status,tasks.completed,tasks.total,task_operations.body FROM tasks JOIN task_operations ON task_operations.id=tasks.id WHERE tasks.id=?", running.ID).Scan(&status, &completed, &total, &body); err != nil {
+		t.Fatal(err)
+	}
+	if status != "running" || completed != running.Completed || total != running.Total || body != runningBody {
+		t.Fatalf("running task changed: status=%s completed=%d total=%d body=%s", status, completed, total, body)
+	}
+	if cancelled || f.app.tasks[running.ID] != running {
+		t.Fatal("clear all cancelled or removed the active operation")
+	}
+}
+
+func TestClearAllTasksRollsBackOperationCleanupOnDeleteFailure(t *testing.T) {
+	f := newTaskRetryFixture(t)
+	if err := f.app.saveTask(&Task{ID: "done", Kind: "copy", Status: "done", Total: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.app.db.Exec("INSERT INTO task_operations(id,body) VALUES(?,?)", "done", `{"kind":"copy","paths":["source.txt"]}`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.app.db.Exec("CREATE TRIGGER reject_task_clear BEFORE DELETE ON tasks BEGIN SELECT RAISE(ABORT, 'task deletion failure'); END"); err != nil {
+		t.Fatal(err)
+	}
+	f.request("POST", "/api/tasks/clear", map[string]any{"all": true}, 400)
+	var count int
+	if err := f.app.db.QueryRow("SELECT count(*) FROM tasks JOIN task_operations ON task_operations.id=tasks.id WHERE tasks.id='done' AND tasks.status='done'").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatal("failed clear all did not roll back task and operation changes")
+	}
 }

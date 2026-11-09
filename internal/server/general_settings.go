@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -10,17 +11,19 @@ import (
 )
 
 type generalSettings struct {
-	DateFormat       string `json:"dateFormat"`
-	PermissionFormat string `json:"permissionFormat"`
+	DateFormat        string `json:"dateFormat"`
+	PermissionFormat  string `json:"permissionFormat"`
+	RecycleBinEnabled bool   `json:"recycleBinEnabled"`
 }
 
 type generalSettingsInput struct {
-	DateFormat       *string         `json:"dateFormat"`
-	PermissionFormat json.RawMessage `json:"permissionFormat"`
+	DateFormat        *string         `json:"dateFormat"`
+	PermissionFormat  json.RawMessage `json:"permissionFormat"`
+	RecycleBinEnabled json.RawMessage `json:"recycleBinEnabled"`
 }
 
 func defaultGeneralSettings() generalSettings {
-	return generalSettings{DateFormat: "locale", PermissionFormat: "octal"}
+	return generalSettings{DateFormat: "locale", PermissionFormat: "octal", RecycleBinEnabled: true}
 }
 
 func (input generalSettingsInput) settings() (generalSettings, error) {
@@ -46,31 +49,45 @@ func (input generalSettingsInput) settings() (generalSettings, error) {
 			return generalSettings{}, fail(http.StatusBadRequest, "通用设置格式错误")
 		}
 	}
+	if input.RecycleBinEnabled != nil {
+		var enabled *bool
+		if err := json.Unmarshal(input.RecycleBinEnabled, &enabled); err != nil || enabled == nil {
+			return generalSettings{}, fail(http.StatusBadRequest, "通用设置格式错误")
+		}
+		settings.RecycleBinEnabled = *enabled
+	}
 	return settings, nil
 }
 
-func (s *Server) generalSettings(w http.ResponseWriter, r *http.Request) error {
+func (s *Server) loadGeneralSettings(ctx context.Context) (generalSettings, error) {
 	var document string
-	err := s.db.QueryRowContext(r.Context(), "SELECT value FROM settings_meta WHERE key='general'").Scan(&document)
+	err := s.db.QueryRowContext(ctx, "SELECT value FROM settings_meta WHERE key='general'").Scan(&document)
 	if errors.Is(err, sql.ErrNoRows) {
-		jsonResponse(w, defaultGeneralSettings())
-		return nil
+		return defaultGeneralSettings(), nil
 	}
 	if err != nil {
-		return fail(http.StatusInternalServerError, "读取通用设置失败")
+		return generalSettings{}, fail(http.StatusInternalServerError, "读取通用设置失败")
 	}
 	var input generalSettingsInput
 	decoder := json.NewDecoder(strings.NewReader(document))
 	decoder.DisallowUnknownFields()
 	if err = decoder.Decode(&input); err != nil {
-		return fail(http.StatusInternalServerError, "已保存的通用设置无效")
+		return generalSettings{}, fail(http.StatusInternalServerError, "已保存的通用设置无效")
 	}
 	if decoder.Decode(&struct{}{}) != io.EOF {
-		return fail(http.StatusInternalServerError, "已保存的通用设置无效")
+		return generalSettings{}, fail(http.StatusInternalServerError, "已保存的通用设置无效")
 	}
 	settings, err := input.settings()
 	if err != nil {
-		return fail(http.StatusInternalServerError, "已保存的通用设置无效")
+		return generalSettings{}, fail(http.StatusInternalServerError, "已保存的通用设置无效")
+	}
+	return settings, nil
+}
+
+func (s *Server) generalSettings(w http.ResponseWriter, r *http.Request) error {
+	settings, err := s.loadGeneralSettings(r.Context())
+	if err != nil {
+		return err
 	}
 	jsonResponse(w, settings)
 	return nil
@@ -89,6 +106,8 @@ func (s *Server) saveGeneralSettings(w http.ResponseWriter, r *http.Request) err
 	if err != nil {
 		return err
 	}
+	s.generalMu.Lock()
+	defer s.generalMu.Unlock()
 	_, err = s.db.ExecContext(r.Context(), "INSERT INTO settings_meta(key,value) VALUES('general',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", string(document))
 	if err != nil {
 		return fail(http.StatusInternalServerError, "保存通用设置失败")

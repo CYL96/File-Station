@@ -76,7 +76,7 @@ export function Settings({ generalSettings, generalLoading, generalError, onSave
     try {
       const saved = await onSaveGeneral(generalDraft ?? generalSettings, controller.signal);
       if (!controller.signal.aborted && saved) {
-        setGeneralDraft(saved); setGeneralSuccess('通用设置已保存，日期和权限显示已更新。');
+        setGeneralDraft(saved); setGeneralSuccess('通用设置已保存。');
       }
     } catch (cause) {
       if (!controller.signal.aborted) setGeneralSaveError(cause instanceof Error ? cause.message : '保存通用设置失败');
@@ -85,7 +85,7 @@ export function Settings({ generalSettings, generalLoading, generalError, onSave
       if (!controller.signal.aborted) setBusy(false);
     }
   }
-  const { dateFormat, permissionFormat } = generalDraft ?? generalSettings;
+  const { dateFormat, permissionFormat, recycleBinEnabled } = generalDraft ?? generalSettings;
   const path = draft ? draft.path.replace(/\/+$/, '') || '/' : '';
   const invalid = !draft?.name.trim() || !draft.path.startsWith('/');
   return <><Modal title={t('设置')} wide headerContent={<button type="button" className="button settings-header-about" disabled={busy} onClick={() => { if (!writing.current) onAbout(); }}><Icon name="help" size={16} />{t('关于 File Station')}</button>} onClose={() => { if (!writing.current) onClose(); }}>
@@ -95,7 +95,7 @@ export function Settings({ generalSettings, generalLoading, generalError, onSave
         <div className="settings-categories">
           <button type="button" className="settings-category-card" onClick={() => setCategory('general')} autoFocus>
             <span className="settings-category-icon"><Icon name="settings" size={24} /></span>
-            <span className="settings-category-copy"><strong>{t('通用设置')}</strong><span>{t('设置全站日期与权限显示格式')}</span></span>
+            <span className="settings-category-copy"><strong>{t('通用设置')}</strong><span>{t('设置全站显示格式与回收站')}</span></span>
             <Icon name="chevron" size={17} />
           </button>
           <button type="button" className="settings-category-card" onClick={() => setCategory('shares')}>
@@ -111,7 +111,7 @@ export function Settings({ generalSettings, generalLoading, generalError, onSave
         </div>
         {category === 'general' ? <form className="general-settings" aria-busy={busy || generalLoading} onSubmit={event => { event.preventDefault(); void saveGeneral(); }}>
           {generalLoading ? <div className="loading-state" role="status"><span className="spinner" />{t('正在读取通用设置…')}</div> : <>
-            {generalError && <p className="form-error" role="alert">{t('未能读取已保存的通用设置：{detail}。当前以默认格式显示；保存将覆盖服务器中的通用设置。', { detail: t(generalError) })}</p>}
+            {generalError && <p className="form-error" role="alert">{t('未能读取已保存的通用设置：{detail}。当前使用默认设置；保存将覆盖服务器中的通用设置。', { detail: t(generalError) })}</p>}
             {generalSaveError && <p className="form-error" role="alert">{t(generalSaveError)}</p>}
             {generalSuccess && <p className="share-settings-success" role="status"><Icon name="check" size={17} />{t(generalSuccess)}</p>}
             <fieldset disabled={busy}>
@@ -134,6 +134,10 @@ export function Settings({ generalSettings, generalLoading, generalError, onSave
               </select>
               <p id="general-permission-help" className="field-help">{t('保存后应用到文件列表和回收站的权限列。仅改变显示格式，不修改实际权限或排序。')}</p>
               <p id="general-permission-preview" className="general-format-preview" aria-live="polite">{t('显示示例：')}<code>{formatPermissions('0755', permissionFormat)}</code></p>
+            </fieldset>
+            <fieldset disabled={busy}>
+              <label className="share-readonly" htmlFor="general-recycle-bin"><input id="general-recycle-bin" type="checkbox" checked={recycleBinEnabled} onChange={event => { const enabled = event.target.checked; setGeneralDraft(current => ({ ...(current ?? generalSettings), recycleBinEnabled: enabled })); setGeneralSaveError(''); setGeneralSuccess(''); }} aria-describedby="general-recycle-help" />{t('启用回收站')}</label>
+              <p id="general-recycle-help" className="field-help">{t('对所有共享生效。关闭后，新删除的文件与文件夹将永久删除，无法恢复；历史回收站项目仍可查看、恢复或永久删除。已提交任务及其重试保持原删除方式。')}</p>
             </fieldset>
             <div className="share-editor-actions"><span className="field-help">{t('选择后需保存才会生效。')}</span><button type="submit" className="button primary" disabled={busy}>{t(busy ? '正在保存…' : '保存通用设置')}</button></div>
           </>}

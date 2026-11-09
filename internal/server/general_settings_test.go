@@ -6,8 +6,8 @@ import (
 	"testing"
 )
 
-const defaultGeneralDocument = `{"dateFormat":"locale","permissionFormat":"octal"}`
-const customGeneralDocument = `{"dateFormat":"dd/MM/yyyy","permissionFormat":"symbolic"}`
+const defaultGeneralDocument = `{"dateFormat":"locale","permissionFormat":"octal","recycleBinEnabled":true}`
+const customGeneralDocument = `{"dateFormat":"dd/MM/yyyy","permissionFormat":"symbolic","recycleBinEnabled":true}`
 
 func assertGeneralSettingsDocument(t *testing.T, raw []byte, want string) {
 	t.Helper()
@@ -43,7 +43,7 @@ func TestGeneralSettingsFormatsRoundTripAndPersist(t *testing.T) {
 	for _, dateFormat := range []string{"yyyy-MM-dd", "yyyy/MM/dd", "dd/MM/yyyy", "MM/dd/yyyy", "locale"} {
 		for _, permissionFormat := range []string{"octal", "symbolic"} {
 			t.Run(dateFormat+"/"+permissionFormat, func(t *testing.T) {
-				document := `{"dateFormat":"` + dateFormat + `","permissionFormat":"` + permissionFormat + `"}`
+				document := `{"dateFormat":"` + dateFormat + `","permissionFormat":"` + permissionFormat + `","recycleBinEnabled":true}`
 				assertGeneralSettingsDocument(t, f.request("POST", "/api/settings/general/save", document, http.StatusOK), document)
 				assertGeneralSettingsDocument(t, f.request("GET", "/api/settings/general", "", http.StatusOK), document)
 				var stored string
@@ -64,7 +64,7 @@ func TestGeneralSettingsFormatsRoundTripAndPersist(t *testing.T) {
 func TestGeneralSettingsLegacyStorageDefaultsPermissionFormat(t *testing.T) {
 	f := newFileSettingsFixture(t)
 	const legacyDocument = `{"dateFormat":"yyyy/MM/dd"}`
-	const want = `{"dateFormat":"yyyy/MM/dd","permissionFormat":"octal"}`
+	const want = `{"dateFormat":"yyyy/MM/dd","permissionFormat":"octal","recycleBinEnabled":true}`
 	if _, err := f.app.db.Exec("INSERT INTO settings_meta(key,value) VALUES('general',?)", legacyDocument); err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +85,7 @@ func TestGeneralSettingsLegacyRequestDefaultsPermissionFormat(t *testing.T) {
 	f := newFileSettingsFixture(t)
 	f.request("POST", "/api/settings/general/save", customGeneralDocument, http.StatusOK)
 	const legacyDocument = `{"dateFormat":"MM/dd/yyyy"}`
-	const want = `{"dateFormat":"MM/dd/yyyy","permissionFormat":"octal"}`
+	const want = `{"dateFormat":"MM/dd/yyyy","permissionFormat":"octal","recycleBinEnabled":true}`
 	assertGeneralSettingsDocument(t, f.request("POST", "/api/settings/general/save", legacyDocument, http.StatusOK), want)
 	assertGeneralSettingsDocument(t, f.request("GET", "/api/settings/general", "", http.StatusOK), want)
 	f.stop()
@@ -123,6 +123,11 @@ func TestGeneralSettingsInvalidWritesPreserveDocument(t *testing.T) {
 		{"unknown permission", `{"dateFormat":"locale","permissionFormat":"rwx"}`},
 		{"wrong permission case", `{"dateFormat":"locale","permissionFormat":"OCTAL"}`},
 		{"padded permission", `{"dateFormat":"locale","permissionFormat":" symbolic "}`},
+		{"null recycle bin", `{"dateFormat":"locale","recycleBinEnabled":null}`},
+		{"string recycle bin", `{"dateFormat":"locale","recycleBinEnabled":"false"}`},
+		{"number recycle bin", `{"dateFormat":"locale","recycleBinEnabled":0}`},
+		{"object recycle bin", `{"dateFormat":"locale","recycleBinEnabled":{}}`},
+		{"array recycle bin", `{"dateFormat":"locale","recycleBinEnabled":[]}`},
 		{"unknown field", `{"dateFormat":"locale","extra":true}`},
 		{"trailing document", defaultGeneralDocument + `{}`},
 		{"trailing null", defaultGeneralDocument + `null`},
@@ -185,6 +190,9 @@ func TestGeneralSettingsCorruptStorageIsNotReplaced(t *testing.T) {
 		`{"dateFormat":"locale","permissionFormat":null}`, `{"dateFormat":"locale","permissionFormat":false}`,
 		`{"dateFormat":"locale","permissionFormat":""}`, `{"dateFormat":"locale","permissionFormat":"unknown"}`,
 		`{"dateFormat":"locale","permissionFormat":"OCTAL"}`, `{"dateFormat":"locale","permissionFormat":" symbolic "}`,
+		`{"dateFormat":"locale","recycleBinEnabled":null}`, `{"dateFormat":"locale","recycleBinEnabled":"false"}`,
+		`{"dateFormat":"locale","recycleBinEnabled":0}`, `{"dateFormat":"locale","recycleBinEnabled":{}}`,
+		`{"dateFormat":"locale","recycleBinEnabled":[]}`,
 		`{"dateFormat":"locale","extra":true}`, defaultGeneralDocument + `{}`,
 		defaultGeneralDocument + `null`, defaultGeneralDocument + `invalid`,
 	} {
@@ -229,4 +237,29 @@ func TestGeneralSettingsStorageFailuresDoNotReturnDefaultsOrSuccess(t *testing.T
 	}
 	f.request("GET", "/api/settings/general", "", http.StatusInternalServerError)
 	f.request("POST", "/api/settings/general/save", defaultGeneralDocument, http.StatusInternalServerError)
+}
+
+func TestGeneralSettingsRecycleBinPersistsAndLegacyStorageDefaultsEnabled(t *testing.T) {
+	f := newFileSettingsFixture(t)
+	const disabled = `{"dateFormat":"dd/MM/yyyy","permissionFormat":"symbolic","recycleBinEnabled":false}`
+	assertGeneralSettingsDocument(t, f.request("POST", "/api/settings/general/save", disabled, http.StatusOK), disabled)
+	f.stop()
+	f.start()
+	assertGeneralSettingsDocument(t, f.request("GET", "/api/settings/general", "", http.StatusOK), disabled)
+	assertGeneralSettingsDocument(t, f.request("POST", "/api/settings/general/save", defaultGeneralDocument, http.StatusOK), defaultGeneralDocument)
+	// An older database containing both pre-existing preferences still enables trash.
+	const legacy = `{"dateFormat":"dd/MM/yyyy","permissionFormat":"symbolic"}`
+	if _, err := f.app.db.Exec("UPDATE settings_meta SET value=? WHERE key='general'", legacy); err != nil {
+		t.Fatal(err)
+	}
+	f.stop()
+	f.start()
+	assertGeneralSettingsDocument(t, f.request("GET", "/api/settings/general", "", http.StatusOK), customGeneralDocument)
+	var stored string
+	if err := f.app.db.QueryRow("SELECT value FROM settings_meta WHERE key='general'").Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored != legacy {
+		t.Fatalf("legacy document was rewritten: %s", stored)
+	}
 }
