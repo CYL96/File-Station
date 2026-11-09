@@ -288,32 +288,42 @@ func (s *Server) getTasks(w http.ResponseWriter, r *http.Request) error {
 func (s *Server) clearTasks(w http.ResponseWriter, r *http.Request) error {
 	var b struct {
 		IDs []string `json:"ids"`
+		All bool     `json:"all"`
 	}
 	if err := decode(w, r, &b); err != nil {
 		return err
 	}
-	if len(b.IDs) > 0 {
+	if b.All || len(b.IDs) > 0 {
 		tx, err := s.db.Begin()
 		if err != nil {
 			return err
 		}
 		defer tx.Rollback()
-		stmt, err := tx.Prepare("DELETE FROM tasks WHERE id=? AND status='done'")
-		if err != nil {
-			return err
-		}
-		defer stmt.Close()
-		cleanup, err := tx.Prepare("DELETE FROM task_operations WHERE id IN (SELECT id FROM tasks WHERE id=? AND status='done')")
-		if err != nil {
-			return err
-		}
-		defer cleanup.Close()
-		for _, id := range b.IDs {
-			if _, err = cleanup.Exec(id); err != nil {
+		if b.All {
+			if _, err = tx.Exec("DELETE FROM task_operations WHERE id IN (SELECT id FROM tasks WHERE status IN ('done','error','cancelled'))"); err != nil {
 				return err
 			}
-			if _, err = stmt.Exec(id); err != nil {
+			if _, err = tx.Exec("DELETE FROM tasks WHERE status IN ('done','error','cancelled')"); err != nil {
 				return err
+			}
+		} else {
+			stmt, err := tx.Prepare("DELETE FROM tasks WHERE id=? AND status='done'")
+			if err != nil {
+				return err
+			}
+			defer stmt.Close()
+			cleanup, err := tx.Prepare("DELETE FROM task_operations WHERE id IN (SELECT id FROM tasks WHERE id=? AND status='done')")
+			if err != nil {
+				return err
+			}
+			defer cleanup.Close()
+			for _, id := range b.IDs {
+				if _, err = cleanup.Exec(id); err != nil {
+					return err
+				}
+				if _, err = stmt.Exec(id); err != nil {
+					return err
+				}
 			}
 		}
 		if err = tx.Commit(); err != nil {

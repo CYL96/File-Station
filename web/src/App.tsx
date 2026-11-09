@@ -293,21 +293,25 @@ export default function App() {
   const running = tasks.filter(task => task.status === 'running').length + uploads.filter(task => task.status === 'running' || task.status === 'queued').length;
   const completedTasks = tasks.filter(task => task.status === 'done').length + uploads.filter(task => task.status === 'done').length;
   const failedTasks = tasks.filter(task => task.status === 'error').length + uploads.filter(task => task.status === 'error').length;
+  const clearableTasks = tasks.length + uploads.length - running;
 
-  async function clearSuccessfulTasks() {
-    if (clearingTasks || completedTasks === 0) return;
+  async function clearTasks(all = false) {
+    if (clearingTasks || (all ? clearableTasks : completedTasks) === 0) return;
     const epoch = authEpoch.current;
-    const taskIds = tasks.filter(task => task.status === 'done').map(task => task.id);
-    const uploadIds = new Set(uploads.filter(task => task.status === 'done').map(task => task.id));
+    const taskIds = tasks.filter(task => all ? task.status !== 'running' : task.status === 'done').map(task => task.id);
+    const uploadIds = new Set(uploads.filter(task => all ? task.status !== 'running' && task.status !== 'queued' : task.status === 'done').map(task => task.id));
     setClearingTasks(true);
     try {
-      await request('tasks/clear', { ids: taskIds });
+      await request('tasks/clear', all ? { all: true } : { ids: taskIds });
       if (epoch !== authEpoch.current) return;
       const clearedIds = new Set(taskIds);
       setTasks(current => current.filter(task => !clearedIds.has(task.id)));
-      setUploads(current => current.filter(task => !uploadIds.has(task.id)));
+      setUploads(current => current.filter(task => !uploadIds.has(task.id) || task.status === 'running' || task.status === 'queued'));
       for (const id of taskIds) previousTasks.current.delete(id);
-      notify('已清除成功任务');
+      for (const id of uploadIds) {
+        if (!enqueuedUploads.current.has(id)) uploadSources.current.delete(id);
+      }
+      notify(all ? '已清除全部终态任务' : '已清除成功任务');
     } catch (error) {
       if (epoch === authEpoch.current) notify(error instanceof Error ? error.message : '清除失败', true);
     } finally {
@@ -653,7 +657,10 @@ export default function App() {
       <button className="drawer-backdrop" aria-label={t('关闭任务中心')} onClick={() => setDrawer(false)} />
       <aside className="task-drawer" aria-label={t('任务中心')}>
         <header className="drawer-header">
-          <button className="button clear-successful-tasks" disabled={clearingTasks || completedTasks === 0} onClick={() => { void clearSuccessfulTasks(); }}><Icon name="trash" size={15} />{t(clearingTasks ? '正在清除…' : '一键清除已成功')}</button>
+          <div className="task-clear-actions">
+            <button className="button clear-tasks" disabled={clearingTasks || completedTasks === 0} onClick={() => { void clearTasks(); }}><Icon name="trash" size={15} />{t(clearingTasks ? '正在清除…' : '清除成功')}</button>
+            <button className="button clear-tasks" disabled={clearingTasks || clearableTasks === 0} onClick={() => { void clearTasks(true); }}><Icon name="trash" size={15} />{t(clearingTasks ? '正在清除…' : '清除全部')}</button>
+          </div>
           <button className="icon-button" aria-label={t('关闭任务中心')} onClick={() => setDrawer(false)}><Icon name="close" /></button>
         </header>
         <dl className="task-statistics" aria-label={t('任务统计')} aria-live="polite">
